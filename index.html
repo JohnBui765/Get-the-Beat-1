@@ -124,6 +124,17 @@ button:disabled{cursor:default}
 .hint{color:var(--text2);font-size:13px;margin:10px 4px 0}
 .saves{display:flex;flex-wrap:wrap;gap:10px;margin:14px 4px 0}
 
+.bench{list-style:none;margin:12px 0 0;padding:0;border-radius:10px;background:var(--console);max-width:680px}
+.bench li{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 14px;padding:9px 12px;font-size:13px;align-items:baseline}
+.bench li + li{border-top:1px solid var(--console-line)}
+.bench .nm{font-weight:600}
+.bench .st{color:var(--text2);text-align:right}
+.bench li.run .st{color:var(--accent)}
+.bench li.bad .st{color:var(--danger)}
+.bench li.skip .nm,.bench li.skip .st{color:var(--text3)}
+.bench li.best .nm::after{content:"Fastest";margin-left:8px;font-size:11px;font-weight:650;color:var(--accent-ink);background:var(--accent);border-radius:6px;padding:1px 6px}
+.bench li.best .st{color:var(--good);font-weight:600}
+.bench-note{margin:10px 0 0;max-width:68ch}
 #toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:rgba(28,28,30,.94);color:#fff;padding:10px 16px;border-radius:12px;font-size:14px;max-width:min(560px,90vw);opacity:0;pointer-events:none;transition:opacity .2s}
 #toast.show{opacity:1}
 @media (prefers-color-scheme: dark){#toast{background:rgba(242,242,247,.96);color:#1C1C1E}}
@@ -142,7 +153,7 @@ button:disabled{cursor:default}
     <img src="icon-192.png" alt="">
     <div>
       <h1>Echo Stems</h1>
-      <p class="sub">Engine test</p>
+      <p class="sub">Engine test, version 1.1</p>
     </div>
     <div class="spacer"></div>
     <span id="offlineBadge" class="badge" hidden>Works offline</span>
@@ -181,6 +192,16 @@ button:disabled{cursor:default}
             <button data-backend="wasm" aria-pressed="false">Processor</button>
           </div>
           <span class="muted small" id="runOnNote"></span>
+        </div>
+        <div id="speedBox" hidden>
+          <div class="row">
+            <span id="speedText"></span>
+            <button class="btn small" id="speedBtn">Find the fastest setting</button>
+            <button class="link" id="speedReset" hidden>Go back to the original settings</button>
+          </div>
+          <p class="muted small" id="speedHint">Runs one 4-second chunk several ways, checks each gives the same result, and keeps the fastest. It takes a few minutes and needs the internet once.</p>
+          <ol class="bench" id="benchList" hidden aria-live="polite"></ol>
+          <p class="bench-note" id="benchNote" hidden></p>
         </div>
       </div>
     </div>
@@ -308,6 +329,9 @@ const S = {
   song: null,                // { name, ab, L, R, dur, peaks }
   part: { start: 0, len: 30 },
   running: false,
+  checking: false,           // speed check in progress
+  speed: null,               // the engine set-up separations use (see the speed check)
+  bench: null,               // this session's speed-check results
   res: null,                 // results
 };
 const kindFor = (backend) => (backend === 'webgpu' && S.gpu && S.gpu.webgpu && !S.gpu.f16 ? 'f32' : 'f16');
@@ -327,23 +351,34 @@ $('installBtn').onclick = async () => { if (!installEvt) return; installEvt.prom
 window.addEventListener('appinstalled', () => { $('installBtn').hidden = true; });
 
 /* ================= worker ================= */
-const worker = new Worker('engine.js');
-worker.onmessage = (e) => {
+// The engine worker is created for the runtime the chosen set-up needs; it is replaced when that changes.
+let worker = null, workerRt = '';
+function ensureWorker() {
+  const rt = S.backend === 'webgpu' && S.speed ? S.speed.rt : 'jsep124';
+  if (worker && workerRt === rt) return worker;
+  if (worker) worker.terminate();
+  worker = new Worker('engine.js');
+  worker.postMessage({ type: 'init', rt });
+  workerRt = rt;
+  worker.onmessage = onEngineMessage;
+  worker.onerror = (e) => { showRunError('The engine stopped unexpectedly (' + (e.message || 'unknown error') + '). Reload the page and try again.'); };
+  return worker;
+}
+function onEngineMessage(e) {
   const m = e.data;
   switch (m.type) {
     case 'status': S.cached = m.cached; renderEngine(); renderRun(); renderBadge(); break;
     case 'dl-progress': S.dl = { got: m.got, total: m.total, secs: m.secs, saving: !!m.saving }; renderEngine(); break;
-    case 'dl-done': S.dl = null; toast('Engine saved on this computer. It works without internet now.'); worker.postMessage({ type: 'status' }); break;
-    case 'imported': toast('Engine loaded from the file and saved on this computer.'); worker.postMessage({ type: 'status' }); break;
-    case 'removed': toast('Engine removed from this computer.'); worker.postMessage({ type: 'status' }); break;
+    case 'dl-done': S.dl = null; toast('Engine saved on this computer. It works without internet now.'); ensureWorker().postMessage({ type: 'status' }); break;
+    case 'imported': toast('Engine loaded from the file and saved on this computer.'); ensureWorker().postMessage({ type: 'status' }); break;
+    case 'removed': toast('Engine removed from this computer.'); ensureWorker().postMessage({ type: 'status' }); break;
     case 'exported': saveBlob(m.blob, m.file); break;
     case 'stage': onStage(m); break;
     case 'progress': onProgress(m); break;
     case 'result': onResult(m); break;
     case 'error': onWorkerError(m); break;
   }
-};
-worker.onerror = (e) => { showRunError('The engine stopped unexpectedly (' + (e.message || 'unknown error') + '). Reload the page and try again.'); };
+}
 
 function onWorkerError(m) {
   const quota = /quota/i.test(m.message);
@@ -352,7 +387,17 @@ function onWorkerError(m) {
     S.dl = null; renderEngine();
     if (!m.cancelled) { $('engineError').textContent = msg; $('engineError').hidden = false; }
   } else if (m.for === 'separate') {
-    S.running = false; renderRun();
+    S.running = false; renderRun(); renderEngine();
+    if (!m.cancelled && runInfo && runInfo.backend === 'webgpu' && !runInfo.retry && runInfo.settingId !== 'original') {
+      const failed = runInfo.setting;
+      S.speed = fallbackSpeed(runInfo.settingId, m.message);
+      saveSpeed();
+      toast(failed + ' failed on this song, so it is running again with ' + S.speed.name.toLowerCase() + '.');
+      if (worker) { worker.terminate(); worker = null; workerRt = ''; }     // start clean on the graphics card
+      renderEngine();
+      startRun(true);
+      return;
+    }
     if (m.cancelled) { $('runText').textContent = 'Stopped.'; $('runBox').hidden = false; $('runBar').style.width = '0'; $('runStop').hidden = true; }
     else showRunError(msg);
   } else {
@@ -397,7 +442,7 @@ function renderEngine() {
     $('runOnRow').hidden = false;
     for (const b of document.querySelectorAll('[data-backend]')) {
       b.setAttribute('aria-pressed', String(b.dataset.backend === S.backend));
-      if (b.dataset.backend === 'webgpu') b.disabled = !g.webgpu;
+      b.disabled = (b.dataset.backend === 'webgpu' && !g.webgpu) || S.checking || S.running || !!S.dl;
     }
     $('runOnNote').textContent = S.backend === 'wasm' ? 'Much slower: use it only to compare.' : '';
   }
@@ -420,11 +465,12 @@ function renderEngine() {
   }
   $('stepEngine').classList.toggle('done', ready);
   $('stepEngine').classList.toggle('active', !ready);
+  renderSpeed();
 }
 
 for (const b of document.querySelectorAll('[data-backend]')) {
   b.onclick = () => {
-    if (S.running) return;
+    if (S.running || S.checking || S.dl) return;
     S.backend = b.dataset.backend;
     try { localStorage.setItem('es-backend', S.backend); } catch (e) { /* private mode */ }
     renderEngine(); renderRun(); renderBadge();
@@ -435,9 +481,9 @@ $('downloadBtn').onclick = async () => {
   try { if (navigator.storage && navigator.storage.persist) await navigator.storage.persist(); } catch (e) { /* not granted */ }
   S.dl = { got: 0, total: MODEL_MB[needKind()] * 1048576, secs: 0 };
   renderEngine();
-  worker.postMessage({ type: 'download', kind: needKind() });
+  ensureWorker().postMessage({ type: 'download', kind: needKind() });
 };
-$('dlStop').onclick = () => worker.postMessage({ type: 'cancel-download' });
+$('dlStop').onclick = () => ensureWorker().postMessage({ type: 'cancel-download' });
 $('importBtn').onclick = () => $('importInput').click();
 $('importInput').onchange = () => {
   const f = $('importInput').files[0];
@@ -445,13 +491,13 @@ $('importInput').onchange = () => {
   if (!f) return;
   $('engineError').hidden = true;
   if (!/\.onnx$/i.test(f.name)) { $('engineError').textContent = 'Choose the engine file: its name ends in .onnx.'; $('engineError').hidden = false; return; }
-  worker.postMessage({ type: 'import', file: f });
+  ensureWorker().postMessage({ type: 'import', file: f });
   toast('Saving the engine from the file…');
 };
-$('backupBtn').onclick = () => { worker.postMessage({ type: 'export', kind: needKind() }); toast('Preparing the copy. Your browser will ask where to save it.'); };
+$('backupBtn').onclick = () => { ensureWorker().postMessage({ type: 'export', kind: needKind() }); toast('Preparing the copy. Your browser will ask where to save it.'); };
 $('removeBtn').onclick = () => {
-  if (S.running) return;
-  if (confirm('Remove the engine from this computer? You would need to download it again (' + MODEL_MB[needKind()] + ' MB) to use the app.')) worker.postMessage({ type: 'remove', kind: needKind() });
+  if (S.running || S.checking) return;
+  if (confirm('Remove the engine from this computer? You would need to download it again (' + MODEL_MB[needKind()] + ' MB) to use the app.')) ensureWorker().postMessage({ type: 'remove', kind: needKind() });
 };
 
 /* ================= step 2: song ================= */
@@ -473,7 +519,7 @@ const drop = $('drop');
 window.addEventListener('drop', (e) => {
   const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
   if (!f) return;
-  if (/\.onnx$/i.test(f.name)) { $('engineError').hidden = true; worker.postMessage({ type: 'import', file: f }); toast('Saving the engine from the file…'); return; }
+  if (/\.onnx$/i.test(f.name)) { $('engineError').hidden = true; ensureWorker().postMessage({ type: 'import', file: f }); toast('Saving the engine from the file…'); return; }
   if (!S.running) loadSong(f);
 });
 
@@ -620,11 +666,12 @@ function renderRun() {
   const s = S.song, [a, b] = partBounds();
   let why = '';
   if (!S.gpu) why = 'Checking your computer…';
+  else if (S.checking) why = 'The speed check is running.';
   else if (!engineReady()) why = 'Get the engine first.';
   else if (!s) why = 'Choose a song first.';
   else if (b - a > MAX_WHOLE) why = 'This song is longer than ' + (MAX_WHOLE / 60) + ' minutes. Test a part of it instead.';
   const btn = $('runBtn');
-  btn.disabled = !!why || S.running || !!S.dl;
+  btn.disabled = !!why || S.running || !!S.dl || S.checking;
   if (s) btn.textContent = b - a >= s.dur - 1e-6 ? 'Separate the whole song (' + fmtClock(s.dur) + ')' : 'Separate ' + fmtClock(a) + ' to ' + fmtClock(b);
   $('runWhy').textContent = S.running ? '' : why;
   $('stepSong').classList.toggle('done', !!s);
@@ -632,20 +679,30 @@ function renderRun() {
   $('stepRun').classList.toggle('active', !why);
 }
 let runInfo = null;
-$('runBtn').onclick = () => {
+$('runBtn').onclick = () => startRun(false);
+function startRun(retry) {
   const s = S.song; if (!s || S.running) return;
   stopPreview(); pause();
   const [a, b] = partBounds();
   const i0 = Math.round(a * SR), i1 = Math.min(s.L.length, Math.round(b * SR));
   const L = s.L.slice(i0, i1), R = s.R.slice(i0, i1);
-  runInfo = { name: s.name, a, b, dur: (i1 - i0) / SR, origL: s.L.slice(i0, i1), origR: s.R.slice(i0, i1), t0: performance.now(), backend: S.backend, kind: needKind(), segMs: [], total: 0 };
+  runInfo = { name: s.name, a, b, dur: (i1 - i0) / SR, origL: s.L.slice(i0, i1), origR: s.R.slice(i0, i1), t0: performance.now(), backend: S.backend, kind: needKind(), segMs: [], total: 0, setting: S.backend === 'webgpu' ? S.speed.name : '', settingId: S.speed.id, retry };
   S.running = true;
+  renderEngine();
   $('runError').hidden = true; $('runBox').hidden = false; $('runStop').hidden = false;
   $('runBar').style.width = '0'; $('runText').textContent = 'Starting…';
   renderRun();
-  worker.postMessage({ type: 'separate', L, R, kind: needKind(), backend: S.backend }, [L.buffer, R.buffer]);
-};
-$('runStop').onclick = () => worker.postMessage({ type: 'cancel' });
+  const cfg = S.backend === 'webgpu' ? { opt: S.speed.opt, capture: S.speed.capture } : {};
+  ensureWorker().postMessage({ type: 'separate', L, R, kind: needKind(), backend: S.backend, cfg }, [L.buffer, R.buffer]);
+}
+// The next-fastest setting that passed the speed check, without the one that just failed; the original settings if none.
+function fallbackSpeed(failedId, why) {
+  const results = (S.speed.results || []).map((r) => (r.id === failedId ? Object.assign({}, r, { ok: false, msg: 'failed during a separation: ' + shortMsg(why) }) : r));
+  const next = results.filter((r) => r.ok && r.match && r.id !== failedId).sort((x, y) => x.steady - y.steady)[0];
+  const su = SETUPS.find((x) => x.id === (next ? next.id : 'original'));
+  return Object.assign({}, S.speed, { id: su.id, name: su.name, rt: su.rt, opt: su.opt, capture: su.capture, chunkMs: next ? next.steady : (S.speed.refMs || 0), results });
+}
+$('runStop').onclick = () => ensureWorker().postMessage({ type: 'cancel' });
 function onStage(m) {
   if (m.stage === 'loading') $('runText').textContent = runInfo.backend === 'webgpu' ? 'Loading the engine onto the graphics card…' : 'Loading the engine into the processor…';
   if (m.stage === 'running') { runInfo.total = m.total; runInfo.tRun = performance.now(); $('runText').textContent = 'Chunk 1 of ' + m.total + '.' + (runInfo.backend === 'webgpu' ? ' The first one takes longer while the graphics card gets ready.' : ''); }
@@ -663,7 +720,7 @@ function showRunError(msg) { S.running = false; renderRun(); $('runBox').hidden 
 const M = { bufs: null, on: [true, true, true, false, true, true], solo: -1, playing: false, offset: 0, when: 0, srcs: [], gains: [], master: null, dur: 0 };
 
 function onResult(m) {
-  S.running = false; renderRun();
+  S.running = false; renderRun(); renderEngine();
   $('runBox').hidden = true;
   const info = runInfo, t = m.timing, n = info.origL.length;
   // sound for playback: the original part plus the six layers
@@ -694,7 +751,7 @@ function deviceText() {
   const engine = t.kind === 'f32' ? '32-bit engine' : '16-bit engine';
   if (t.backend === 'webgpu') {
     const a = t.adapter ? cardName(t.adapter) : (S.gpu && S.gpu.label) || '';
-    return 'graphics card' + (a ? ' (' + a + ')' : '') + ', ' + engine;
+    return 'graphics card' + (a ? ' (' + a + ')' : '') + ', ' + engine + (S.res.info.setting ? ', ' + S.res.info.setting.toLowerCase() : '');
   }
   return 'processor, ' + engine;
 }
@@ -722,6 +779,8 @@ function reportText() {
     'Sound maths (spectrograms): ' + (t.dspMs / 1000).toFixed(2) + ' s in total',
     'Engine loading: ' + (t.freshSession ? x.load.toFixed(2) + ' s' : 'already loaded'),
     'Estimate for a 4-minute song: ' + fmtDur(x.est4),
+    'Speed setting: ' + speedLine(S.speed),
+    ...benchReport(),
     'Graphics card check: ' + (S.gpu ? (S.gpu.webgpu ? 'WebGPU yes, 16-bit ' + (S.gpu.f16 ? 'yes' : 'no') + (S.gpu.label ? ', ' + S.gpu.label : '') : 'WebGPU not available (' + S.gpu.reason + ')') : 'not checked'),
     'Browser: ' + ua,
   ].join('\n');
@@ -920,14 +979,214 @@ $('saveAll').onclick = async () => {
   }
 };
 
+/* ================= speed check ================= */
+const SETUPS = [
+  { id: 'original', name: 'Original settings', rt: 'jsep124', opt: 'disabled', capture: false, runs: 1 },
+  { id: 'optimised', name: 'Optimisations on', rt: 'jsep124', opt: 'all', capture: false, runs: 2 },
+  { id: 'optimised-replay', name: 'Optimisations on + replay', rt: 'jsep124', opt: 'all', capture: true, runs: 8, needs: 'optimised' },
+  { id: 'newer', name: 'Newer runtime', rt: 'wgpu130', opt: 'all', capture: false, runs: 2, online: true },
+  // Not offered: the newer runtime with replay. In testing it either failed after six runs or returned wrong numbers.
+];
+const RUNTIME_NAMES = { jsep124: 'ONNX Runtime 1.24.3, saved with the app', wgpu130: 'ONNX Runtime 1.30.0, newer graphics-card runtime' };
+const CDN130 = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/';
+const CDN130_FILES = ['ort.webgpu.min.js', 'ort-wasm-simd-threaded.asyncify.mjs', 'ort-wasm-simd-threaded.asyncify.wasm'].map((f) => CDN130 + f);
+const DEFAULT_SPEED = { id: 'original', name: 'Original settings', rt: 'jsep124', opt: 'disabled', capture: false };
+const SETUP_TIMEOUT = 240000;
+
+function loadSpeed() {
+  try {
+    const v = JSON.parse(localStorage.getItem('es-speed') || 'null');
+    const su = v && SETUPS.find((x) => x.id === v.id);
+    if (su) return Object.assign({}, v, { name: su.name, rt: su.rt, opt: su.opt, capture: su.capture });
+  } catch (e) { /* nothing saved */ }
+  return Object.assign({}, DEFAULT_SPEED);
+}
+function saveSpeed() { try { localStorage.setItem('es-speed', JSON.stringify(S.speed)); } catch (e) { /* private mode */ } }
+function speedLine(sp) {
+  return sp.name + ' (' + RUNTIME_NAMES[sp.rt] + '; optimisations ' + (sp.opt === 'disabled' ? 'off' : 'on') + (sp.capture ? '; replay' : '') + ')' + (sp.chunkMs ? ', ' + (sp.chunkMs / 1000).toFixed(2) + ' s per chunk' : '');
+}
+// Chunk times: two decimals below 10 s, so close results don't look tied.
+function fmtChunk(ms) { return (ms / 1000).toFixed(ms < 10000 ? 2 : 1) + ' s'; }
+function shortMsg(m) { m = String(m || '').replace(/\s+/g, ' ').trim(); return m.length > 160 ? m.slice(0, 157) + '…' : m; }
+
+function renderSpeed() {
+  const show = !!(S.gpu && S.gpu.webgpu && S.backend === 'webgpu' && engineReady() && !S.dl);
+  $('speedBox').hidden = !show && !S.checking;
+  if ($('speedBox').hidden || !S.speed) return;
+  const sp = S.speed;
+  if (S.checking) $('speedText').textContent = 'Checking the speed. Keep this tab open; it takes a few minutes.';
+  else if (sp.at) $('speedText').textContent = 'Speed setting: ' + sp.name + ', ' + fmtChunk(sp.chunkMs) + ' per chunk (checked ' + new Date(sp.at).toLocaleDateString() + ').';
+  else $('speedText').textContent = 'Speed setting: ' + sp.name + ' (not checked yet).';
+  $('speedBtn').hidden = S.checking;
+  $('speedBtn').disabled = S.running;
+  $('speedBtn').textContent = sp.at ? 'Check again' : 'Find the fastest setting';
+  $('speedHint').hidden = S.checking || !!sp.at;
+  $('speedReset').hidden = S.checking || sp.id === 'original';
+}
+
+// The 4-second chunk the check uses: from the chosen part of your song if one is open, otherwise a test tone.
+function testChunk() {
+  const n = SR * 4;
+  if (S.song) {
+    const [a] = partBounds();
+    const i0 = Math.max(0, Math.min(Math.round(a * SR), S.song.L.length - n));
+    return { L: S.song.L.slice(i0, i0 + n), R: S.song.R.slice(i0, i0 + n) };
+  }
+  const L = new Float32Array(n), R = new Float32Array(n);
+  let seed = 12345;
+  const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296 - 0.5);
+  for (let i = 0; i < n; i++) {
+    const t = i / SR;
+    L[i] = 0.3 * Math.sin(2 * Math.PI * 220 * t) + 0.2 * Math.sin(2 * Math.PI * 330 * t) * Math.sin(3 * t) + 0.1 * rnd();
+    R[i] = 0.3 * Math.sin(2 * Math.PI * 277 * t) + 0.1 * rnd();
+  }
+  return { L, R };
+}
+
+// Runs one set-up in its own worker, which is closed afterwards so the graphics card's memory is freed.
+function runSetup(su, chunk, onText) {
+  return new Promise((resolve) => {
+    const w = new Worker('engine.js');
+    w.postMessage({ type: 'init', rt: su.rt });
+    let done = false;
+    const finish = (r) => { if (done) return; done = true; clearTimeout(timer); w.terminate(); resolve(r); };
+    const timer = setTimeout(() => finish({ ok: false, msg: 'took longer than ' + SETUP_TIMEOUT / 60000 + ' minutes, so it was stopped' }), SETUP_TIMEOUT);
+    w.onmessage = (e) => {
+      const m = e.data;
+      if (m.type === 'bench-stage') onText(m.stage === 'loading' ? 'Loading the engine…' : 'Running…');
+      else if (m.type === 'bench-progress') onText('Run ' + m.run + ' of ' + m.runs + ' took ' + fmtSec(m.ms / 1000));
+      else if (m.type === 'bench-result') finish(m.runtime === su.rt ? Object.assign({ ok: true }, m) : { ok: false, msg: 'the engine loaded the wrong runtime (' + m.runtime + ')' });
+      else if (m.type === 'error') finish({ ok: false, msg: m.message, logs: m.logs || [] });
+    };
+    w.onerror = (e) => { e.preventDefault(); finish({ ok: false, msg: e.message || 'the engine stopped unexpectedly' }); };
+    const L = chunk.L.slice(), R = chunk.R.slice();
+    w.postMessage({ type: 'bench', kind: needKind(), cfg: { opt: su.opt, capture: su.capture }, L, R, runs: su.runs, maxMs: 60000 }, [L.buffer, R.buffer]);
+  });
+}
+
+// How far a set-up's result is from the original settings' result (root-mean-square, relative).
+function relErr(a, b) {
+  let num = 0, den = 0;
+  for (const k of ['re', 'im']) {
+    const x = a[k], y = b[k];
+    for (let i = 0; i < y.length; i += 3) { const d = x[i] - y[i]; num += d * d; den += y[i] * y[i]; }
+  }
+  return den > 0 ? Math.sqrt(num / den) : (num > 0 ? 1 : 0);
+}
+function describeResult(r, ref) {
+  if (r.skipped) return r.msg.replace(/^skipped/, 'Skipped');
+  if (!r.ok) return 'Didn’t work: ' + shortMsg(r.msg);
+  const t = fmtChunk(r.steady) + ' per chunk';
+  if (r === ref) return t + ' (the reference)';
+  return t + (r.match ? ', same result' : ', different result (' + (r.err * 100).toFixed(1) + '% off)');
+}
+function brief(r) {
+  const o = { id: r.id, name: r.name, ok: !!r.ok, skipped: !!r.skipped, msg: shortMsg(r.msg) };
+  if (r.ok) Object.assign(o, { steady: r.steady, first: r.first, match: r.match, err: r.err, dsp: r.stftMs + r.istftMs, runtime: r.runtime });
+  if (!r.ok && r.logs && r.logs.length) o.logs = r.logs.slice(-3).map(shortMsg);
+  return o;
+}
+function benchReport() {
+  const list = S.bench || (S.speed && S.speed.results);
+  if (!list) return ['Speed check: not run yet'];
+  const out = ['Speed check, one 4-second chunk:'];
+  for (const r of list) {
+    let t;
+    if (r.skipped) t = r.msg;
+    else if (!r.ok) t = 'failed: ' + r.msg + (r.logs ? ' | log: ' + r.logs.join(' / ') : '');
+    else t = (r.steady / 1000).toFixed(2) + ' s per chunk (first run ' + (r.first / 1000).toFixed(2) + ' s)' + (r.err ? ', ' + (r.err * 100).toFixed(2) + '% from the reference' : '') + ', sound maths ' + (r.dsp / 1000).toFixed(2) + ' s';
+    out.push('  ' + r.name + ': ' + t);
+  }
+  return out;
+}
+
+async function speedCheck() {
+  if (S.checking || S.running || S.dl || !engineReady() || S.backend !== 'webgpu') return;
+  S.checking = true;
+  stopPreview(); pause();
+  if (worker) { worker.terminate(); worker = null; workerRt = ''; }      // free the graphics card for the check
+  renderEngine(); renderRun();
+  const chunk = testChunk();
+  const list = $('benchList');
+  list.innerHTML = ''; list.hidden = false; $('benchNote').hidden = true;
+  const rows = {};
+  for (const su of SETUPS) {
+    const li = document.createElement('li');
+    li.innerHTML = '<span class="nm"></span><span class="st tab"></span>';
+    li.querySelector('.nm').textContent = su.name;
+    li.querySelector('.st').textContent = 'Waiting';
+    list.appendChild(li); rows[su.id] = li;
+  }
+  const set = (id, text, cls) => { const li = rows[id]; li.querySelector('.st').textContent = text; if (cls !== undefined) li.className = cls; };
+  const results = [];
+  let ref = null, aborted = '';
+  for (const su of SETUPS) {
+    const dep = su.needs && results.find((r) => r.id === su.needs);
+    if (su.needs && !(dep && dep.ok && dep.match)) {
+      const r = { id: su.id, name: su.name, ok: false, skipped: true, msg: 'skipped: it needs “' + SETUPS.find((x) => x.id === su.needs).name + '” to work first' };
+      results.push(r); set(su.id, describeResult(r), 'skip'); continue;
+    }
+    if (su.online && !navigator.onLine) {
+      const r = { id: su.id, name: su.name, ok: false, skipped: true, msg: 'skipped: it needs the internet once' };
+      results.push(r); set(su.id, describeResult(r), 'skip'); continue;
+    }
+    set(su.id, 'Starting…', 'run');
+    const r = Object.assign({ id: su.id, name: su.name }, await runSetup(su, chunk, (t) => set(su.id, t)));
+    if (r.ok) {
+      r.first = r.times[0];
+      r.steady = su.runs > 1 ? Math.min(...r.times.slice(1)) : r.times[0];
+      if (!ref) { ref = r; r.err = 0; r.match = true; }
+      else { r.err = relErr(r, ref); r.match = r.err < 0.02; }
+      if (r !== ref) { r.re = r.im = null; }
+    }
+    results.push(r);
+    set(su.id, describeResult(r, ref), r.ok ? (r.match ? '' : 'bad') : 'bad');
+    if (su.id === 'original' && !r.ok) { aborted = r.msg; break; }
+  }
+  if (ref) { ref.re = ref.im = null; }
+
+  const good = results.filter((r) => r.ok && r.match);
+  const best = good.reduce((b, r) => (!b || r.steady < b.steady ? r : b), null);
+  let note;
+  if (aborted) note = 'The check stopped because the original settings didn’t run (' + shortMsg(aborted) + '). Copy the report and paste it in our chat.';
+  else if (!best) note = 'None of the set-ups worked. Copy the report and paste it in our chat.';
+  else {
+    rows[best.id].classList.add('best');
+    const su = SETUPS.find((x) => x.id === best.id);
+    const est = (best.first + 79 * best.steady + 80 * (best.stftMs + best.istftMs)) / 1000;
+    note = best.id === 'original'
+      ? 'The original settings are still the fastest that give the same result.'
+      : best.name + ' is ' + (ref.steady / best.steady).toFixed(1) + '× faster than the original settings: ' + fmtChunk(best.steady) + ' instead of ' + fmtChunk(ref.steady) + ' per chunk. Separations now use it.';
+    note += ' A 4-minute song should take about ' + fmtDur(est) + '.';
+    S.speed = { id: su.id, name: su.name, rt: su.rt, opt: su.opt, capture: su.capture, chunkMs: best.steady, refMs: ref.steady, at: new Date().toISOString(), results: results.map(brief) };
+    saveSpeed();
+    if (su.rt === 'wgpu130') CDN130_FILES.forEach((u) => fetch(u, { mode: 'cors' }).catch(() => {}));   // make sure it's saved for offline use
+  }
+  S.bench = results.map(brief);
+  $('benchNote').textContent = note; $('benchNote').hidden = false;
+  S.checking = false;
+  ensureWorker().postMessage({ type: 'status' });
+  renderEngine(); renderRun();
+}
+$('speedBtn').onclick = () => { speedCheck(); };
+$('speedReset').onclick = () => {
+  if (S.checking || S.running) return;
+  S.speed = Object.assign({}, DEFAULT_SPEED);
+  saveSpeed();
+  ensureWorker().postMessage({ type: 'status' });
+  renderEngine();
+  toast('Back to the original settings.');
+};
+
 /* ================= start ================= */
+S.speed = loadSpeed();
 try { const b = localStorage.getItem('es-backend'); if (b === 'webgpu' || b === 'wasm') S.backend = b; } catch (e) { /* private mode */ }
 probeGpu().then((g) => {
   S.gpu = g;
   if (!g.webgpu) S.backend = 'wasm';
   renderEngine(); renderRun(); renderBadge();
 });
-worker.postMessage({ type: 'status' });
+ensureWorker().postMessage({ type: 'status' });
 renderRun();
 </script>
 </body>

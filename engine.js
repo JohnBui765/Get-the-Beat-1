@@ -238,14 +238,22 @@ const CORE = (() => {
   function now() { return (typeof performance !== 'undefined' ? performance : Date).now(); }
   function cancelledError() { const e = new Error('Stopped'); e.name = 'Cancelled'; return e; }
 
-  return { SR, CHUNK, OVERLAP, STEP, NFFT, HOP, F, T, SPEC, STEMS, fft, stft, istftStem, segmentCount, fillChunk, addSegment, separate };
+  return { SR, CHUNK, OVERLAP, STEP, NFFT, HOP, F, T, SPEC, STEMS, fft, stft, istftStem, segmentCount, fillChunk, addSegment, outputLooksValid, energy, separate };
 })();
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = CORE;
 } else {
   /* ================= worker side ================= */
-  const ORT_DIR = 'ort-1.24.3/';
+  // Which ONNX Runtime this worker uses is set by the page's first message ({ type: 'init', rt }), not by the worker's
+  // address: when the service worker serves this file from its cache, the address loses its ?rt= part.
+  // Each speed-check set-up runs in a fresh worker, so only one engine sits on the graphics card at a time.
+  const CDN130 = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/';
+  const RUNTIMES = {
+    jsep124: { script: 'ort-1.24.3/ort.min.js', wasm: new URL('ort-1.24.3/', self.location).href },   // saved with the app
+    wgpu130: { script: CDN130 + 'ort.webgpu.min.js', wasm: CDN130 },                                  // newer runtime, from a public CDN
+  };
+  let RT = 'jsep124';
   const REPO = 'elicwhite/bs-roformer-sw-6stem-onnx';
   const REV = 'a744f80957374e1735ad70fa122670b7961da8cc';           // pinned upload, so the file can never change under us
   const MODELS = {
@@ -259,20 +267,35 @@ if (typeof module !== 'undefined' && module.exports) {
     `https://huggingface.co/${REPO}/resolve/main/${MODELS[kind].file}`,
   ];
 
+  // ONNX Runtime reports problems (for example steps it moves to the processor) on the console; keep the latest lines
+  // so the speed check can include them in its report.
+  const logs = [];
+  for (const level of ['log', 'info', 'warn', 'error']) {
+    const orig = console[level] ? console[level].bind(console) : () => {};
+    console[level] = (...a) => {
+      try {
+        const s = a.map((x) => (typeof x === 'string' ? x : x && x.message ? x.message : String(x))).join(' ').trim();
+        if (s) { logs.push(level + ': ' + s.slice(0, 300)); if (logs.length > 60) logs.shift(); }
+      } catch (e) { /* never let logging break the engine */ }
+      orig(...a);
+    };
+  }
+
   const post = (m, tr) => self.postMessage(m, tr || []);
+  const now = () => performance.now();
   let dlAbort = null, cancel = false;
-  let ortLoaded = false, session = null, sessionKey = '';
+  let ortLoaded = false, current = null;       // current = { key, s, runner }
   let device = null, gpuErrors = 0, gpuError = '', gpuLost = '';
 
   function loadOrt() {
     if (ortLoaded) return;
-    importScripts(ORT_DIR + 'ort.min.js');
+    importScripts(RUNTIMES[RT].script);
     const ort = self.ort;
-    ort.env.wasm.wasmPaths = new URL(ORT_DIR, self.location).href;
+    ort.env.wasm.wasmPaths = RUNTIMES[RT].wasm;
     ort.env.wasm.numThreads = 1;           // GitHub Pages can't enable the shared memory that threads need
     ort.env.wasm.proxy = false;
-    ort.env.logLevel = 'error';
-    try { ort.env.webgpu.powerPreference = 'high-performance'; } catch (e) { /* older option name */ }
+    ort.env.logLevel = 'warning';
+    try { ort.env.webgpu.powerPreference = 'high-performance'; } catch (e) { /* option not in this runtime */ }
     ortLoaded = true;
   }
 
@@ -307,14 +330,14 @@ if (typeof module !== 'undefined' && module.exports) {
     const reader = res.body.getReader();
     const parts = [];
     let got = 0, lastPost = 0;
-    const t0 = performance.now();
+    const t0 = now();
     try {
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
         parts.push(value);
         got += value.byteLength;
-        const t = performance.now();
+        const t = now();
         if (t - lastPost > 250) { lastPost = t; post({ type: 'dl-progress', kind, got, total, secs: (t - t0) / 1000 }); }
       }
     } catch (e) {
@@ -325,9 +348,9 @@ if (typeof module !== 'undefined' && module.exports) {
       throw new Error('The download ended early (' + mb(got) + ' of ' + mb(total) + '). Try again.');
     }
     if (Math.abs(got - m.bytes) > m.bytes * 0.02) {
-      throw new Error('The file that arrived (' + mb(got) + ') isn\u2019t the engine (' + mb(m.bytes) + ' expected). Try again later.');
+      throw new Error('The file that arrived (' + mb(got) + ') isn’t the engine (' + mb(m.bytes) + ' expected). Try again later.');
     }
-    post({ type: 'dl-progress', kind, got, total, secs: (performance.now() - t0) / 1000, saving: true });
+    post({ type: 'dl-progress', kind, got, total, secs: (now() - t0) / 1000, saving: true });
     const blob = new Blob(parts, { type: 'application/octet-stream' });
     parts.length = 0;
     const cache = await caches.open(MODEL_CACHE);
@@ -340,12 +363,12 @@ if (typeof module !== 'undefined' && module.exports) {
     const kind = file.size >= 500e6 ? 'f32' : 'f16';
     const cache = await caches.open(MODEL_CACHE);
     await cache.put(keyFor(kind), new Response(file, { headers: { 'content-type': 'application/octet-stream', 'content-length': String(file.size) } }));
-    if (sessionKey.startsWith(kind + '/')) await dropSession();
+    if (current && current.key.startsWith(kind + '/')) await dropSession();
     post({ type: 'imported', kind, bytes: file.size });
   }
 
   async function removeModel(kind) {
-    if (sessionKey.startsWith(kind + '/')) await dropSession();
+    if (current && current.key.startsWith(kind + '/')) await dropSession();
     const cache = await caches.open(MODEL_CACHE);
     await cache.delete(keyFor(kind));
     post({ type: 'removed', kind });
@@ -359,49 +382,98 @@ if (typeof module !== 'undefined' && module.exports) {
   }
 
   async function dropSession() {
-    if (session) { try { await session.release(); } catch (e) { /* already gone */ } }
-    session = null; sessionKey = '';
+    if (!current) return;
+    try { current.runner.dispose(); } catch (e) { /* buffers already gone */ }
+    try { await current.s.release(); } catch (e) { /* already gone */ }
+    current = null;
   }
 
   function watch(dev) {
-    if (!dev || dev === device) return;
+    if (!dev || dev === device || typeof dev.addEventListener !== 'function') return;
     device = dev;
     dev.addEventListener('uncapturederror', (e) => {
       gpuErrors++;
       if (!gpuError) gpuError = (e && e.error && e.error.message) || 'unknown error';
     });
-    dev.lost.then((info) => { gpuLost = (info && (info.message || info.reason)) || 'the graphics card stopped responding'; });
+    if (dev.lost) dev.lost.then((info) => { gpuLost = (info && (info.message || info.reason)) || 'the graphics card stopped responding'; });
   }
 
   async function adapterInfo() {
     try {
-      const dev = device || (session && sessionKey.endsWith('/webgpu') ? await self.ort.env.webgpu.device : null);
-      const i = dev && dev.adapterInfo;
+      const i = device && device.adapterInfo;
       if (i) return { vendor: i.vendor || '', architecture: i.architecture || '', description: i.description || '', device: i.device || '' };
     } catch (e) { /* not available */ }
     return null;
   }
 
-  async function getSession(kind, backend) {
-    const key = kind + '/' + backend;
-    if (session && sessionKey === key && !gpuLost) return { s: session, loadMs: 0, fresh: false };
+  // How each chunk reaches the model and comes back.
+  // Normal: the data goes in and out through ONNX Runtime. Replay ("graph capture"): the inputs and outputs live in
+  // fixed buffers on the graphics card, so after the first run ONNX Runtime can replay the recorded work in one go.
+  async function makeRunner(s, backend, cfg) {
+    const ort = self.ort, dims = [1, 2, CORE.F, CORE.T];
+    if (!(backend === 'webgpu' && cfg.capture)) {
+      return {
+        run: async (re, im) => {
+          const out = await s.run({ spec_real: new ort.Tensor('float32', re, dims), spec_imag: new ort.Tensor('float32', im, dims) });
+          const res = { re: out.out_spec_real.data.slice(), im: out.out_spec_imag.data.slice() };
+          for (const k of Object.keys(out)) { try { out[k].dispose(); } catch (e) { /* cpu tensor */ } }
+          return res;
+        },
+        dispose: () => {},
+      };
+    }
+    const dev = device;
+    if (!dev || typeof dev.createBuffer !== 'function') throw new Error('this runtime doesn\u2019t share its graphics-card handle, which replay mode needs');
+    const U = self.GPUBufferUsage;
+    const inBytes = CORE.SPEC * 4;
+    const inRe = dev.createBuffer({ size: inBytes, usage: U.STORAGE | U.COPY_DST | U.COPY_SRC });
+    const inIm = dev.createBuffer({ size: inBytes, usage: U.STORAGE | U.COPY_DST | U.COPY_SRC });
+    const feeds = {
+      spec_real: ort.Tensor.fromGpuBuffer(inRe, { dataType: 'float32', dims }),
+      spec_imag: ort.Tensor.fromGpuBuffer(inIm, { dataType: 'float32', dims }),
+    };
+    // The outputs are left to ONNX Runtime and released after each read. Pre-allocated output buffers broke the newer
+    // runtime's replay after six runs in testing; this way passed 40 runs on both runtimes.
+    return {
+      run: async (re, im) => {
+        dev.queue.writeBuffer(inRe, 0, re);
+        dev.queue.writeBuffer(inIm, 0, im);
+        const out = await s.run(feeds);
+        try {
+          return { re: await out.out_spec_real.getData(), im: await out.out_spec_imag.getData() };
+        } finally {
+          for (const k of Object.keys(out)) { try { out[k].dispose(); } catch (e) { /* already released */ } }
+        }
+      },
+      dispose: () => { for (const b of [inRe, inIm]) { try { b.destroy(); } catch (e) { /* gone */ } } },
+    };
+  }
+
+  const cfgKey = (kind, backend, cfg) => [kind, backend, cfg.opt || 'disabled', cfg.capture ? 'replay' : 'plain'].join('/');
+
+  async function getSession(kind, backend, cfg) {
+    cfg = cfg || {};
+    const key = cfgKey(kind, backend, cfg);
+    if (current && current.key === key && !gpuLost) return { s: current.s, runner: current.runner, loadMs: 0, fresh: false };
     await dropSession();
     if (gpuLost) { device = null; gpuLost = ''; }
     loadOrt();
-    const t0 = performance.now();
+    const t0 = now();
     const cache = await caches.open(MODEL_CACHE);
     const r = await cache.match(keyFor(kind));
     if (!r) throw new Error('The engine isn’t saved on this computer yet. Download it first.');
-    const bytes = new Uint8Array(await r.arrayBuffer());
+    let bytes = new Uint8Array(await r.arrayBuffer());
     const opts = backend === 'webgpu'
-      ? { executionProviders: ['webgpu'], graphOptimizationLevel: 'disabled' }
-      : { executionProviders: ['wasm'] };
+      ? Object.assign({ executionProviders: ['webgpu'], graphOptimizationLevel: cfg.opt || 'disabled', logSeverityLevel: 2 },
+          cfg.capture ? { enableGraphCapture: true, preferredOutputLocation: 'gpu-buffer' } : {})
+      : { executionProviders: ['wasm'], logSeverityLevel: 2 };
     let s;
     try {
       s = await self.ort.InferenceSession.create(bytes, opts);
     } catch (e) {
       throw new Error((backend === 'webgpu' ? 'The graphics card couldn’t load the engine' : 'The processor couldn’t load the engine') + ' (' + e.message + ').');
     }
+    bytes = null;
     const want = ['spec_real', 'spec_imag', 'out_spec_real', 'out_spec_imag'];
     const have = s.inputNames.concat(s.outputNames);
     if (!want.every((n) => have.includes(n))) {
@@ -409,33 +481,30 @@ if (typeof module !== 'undefined' && module.exports) {
       throw new Error('That file isn’t the separation engine this app expects (BS-RoFormer SW, 6 layers).');
     }
     if (backend === 'webgpu') {
-      try { watch(await self.ort.env.webgpu.device); } catch (e) { /* no device handle in this version */ }
+      try { watch(await self.ort.env.webgpu.device); } catch (e) { /* no device handle in this runtime */ }
     }
-    session = s; sessionKey = key;
-    return { s, loadMs: performance.now() - t0, fresh: true };
+    let runner;
+    try { runner = await makeRunner(s, backend, cfg); }
+    catch (e) { try { await s.release(); } catch (x) { /* ignore */ } throw new Error('Replay mode couldn’t start (' + e.message + ').'); }
+    current = { key, s, runner };
+    return { s, runner, loadMs: now() - t0, fresh: true };
+  }
+
+  function checkGpu() {
+    if (gpuLost) throw new Error('The graphics card stopped responding (' + gpuLost + '). Try again, or run on the processor.');
+    if (gpuErrors) throw new Error('The graphics card reported an error (' + gpuError + ').');
   }
 
   async function separate(msg) {
     cancel = false;
     gpuErrors = 0; gpuError = '';
     const { L, R, kind, backend } = msg;
+    const cfg = backend === 'webgpu' ? (msg.cfg || {}) : {};
     post({ type: 'stage', stage: 'loading' });
-    const { s, loadMs, fresh } = await getSession(kind, backend);
+    const g = await getSession(kind, backend, cfg);
     post({ type: 'stage', stage: 'running', total: CORE.segmentCount(L.length) });
-    const ort = self.ort, dims = [1, 2, CORE.F, CORE.T];
-    const run = async (re, im) => {
-      const feeds = { spec_real: new ort.Tensor('float32', re, dims), spec_imag: new ort.Tensor('float32', im, dims) };
-      const out = await s.run(feeds);
-      const res = { re: out.out_spec_real.data.slice(), im: out.out_spec_imag.data.slice() };
-      for (const k of Object.keys(out)) { try { out[k].dispose(); } catch (e) { /* cpu tensor */ } }
-      return res;
-    };
-    const check = () => {
-      if (gpuLost) throw new Error('The graphics card stopped responding (' + gpuLost + '). Try again, or run on the processor.');
-      if (gpuErrors) throw new Error('The graphics card reported an error (' + gpuError + '). Try again, or run on the processor.');
-    };
     const r = await CORE.separate({
-      L, R, run, check,
+      L, R, run: g.runner.run, check: checkGpu,
       isCancelled: () => cancel,
       onProgress: (p) => post({ type: 'progress', ...p }),
     });
@@ -444,8 +513,42 @@ if (typeof module !== 'undefined' && module.exports) {
     for (const st of stems) transfer.push(st.L.buffer, st.R.buffer);
     post({
       type: 'result', stems,
-      timing: { loadMs, freshSession: fresh, totalMs: r.totalMs, segMs: r.segMs, dspMs: r.dspMs, nSeg: r.nSeg, backend, kind, adapter: backend === 'webgpu' ? await adapterInfo() : null },
+      timing: { loadMs: g.loadMs, freshSession: g.fresh, totalMs: r.totalMs, segMs: r.segMs, dspMs: r.dspMs, nSeg: r.nSeg, backend, kind, cfg, runtime: RT, adapter: backend === 'webgpu' ? await adapterInfo() : null },
     }, transfer);
+  }
+
+  // Speed check: load the engine with one set-up, run the same 4-second chunk a few times, report the times and the result.
+  async function bench(msg) {
+    const { kind, cfg, L, R, runs } = msg;
+    const maxMs = msg.maxMs || 60000;
+    logs.length = 0; gpuErrors = 0; gpuError = '';
+    post({ type: 'bench-stage', stage: 'loading' });
+    const g = await getSession(kind, 'webgpu', cfg);
+    const cL = new Float32Array(CORE.CHUNK), cR = new Float32Array(CORE.CHUNK);
+    CORE.fillChunk(L, R, 0, cL, cR);
+    const re = new Float32Array(CORE.SPEC), im = new Float32Array(CORE.SPEC);
+    let t = now();
+    CORE.stft(cL, cR, re, im);
+    const stftMs = now() - t;
+    post({ type: 'bench-stage', stage: 'running' });
+    const times = [];
+    let out = null;
+    const tStart = now();
+    for (let i = 0; i < runs; i++) {
+      t = now();
+      out = await g.runner.run(re, im);
+      times.push(now() - t);
+      checkGpu();
+      if (!CORE.outputLooksValid(out.re, out.im, 1)) throw new Error('the graphics card sent back silence or invalid numbers');
+      post({ type: 'bench-progress', run: i + 1, runs, ms: times[i] });
+      if (i >= 1 && now() - tStart > maxMs) break;
+    }
+    const sL = new Float32Array(CORE.CHUNK), sR = new Float32Array(CORE.CHUNK);
+    t = now();
+    for (let s = 0; s < CORE.STEMS.length; s++) CORE.istftStem(out.re, out.im, s, sL, sR);
+    const istftMs = now() - t;
+    const res = { re: out.re.slice(), im: out.im.slice() };
+    post({ type: 'bench-result', loadMs: g.loadMs, times, stftMs, istftMs, runtime: RT, adapter: await adapterInfo(), logs: logs.slice(-12), re: res.re, im: res.im }, [res.re.buffer, res.im.buffer]);
   }
 
   function cancelled() { const e = new Error('Stopped'); e.name = 'Cancelled'; return e; }
@@ -454,6 +557,7 @@ if (typeof module !== 'undefined' && module.exports) {
   self.onmessage = (e) => {
     const m = e.data || {};
     const job = {
+      init: () => { if (!ortLoaded && RUNTIMES[m.rt]) RT = m.rt; },
       status: () => status(),
       download: () => download(m.kind),
       'cancel-download': () => { if (dlAbort) dlAbort.abort(); },
@@ -461,12 +565,13 @@ if (typeof module !== 'undefined' && module.exports) {
       remove: () => removeModel(m.kind),
       export: () => exportModel(m.kind),
       separate: () => separate(m),
+      bench: () => bench(m),
       cancel: () => { cancel = true; },
     }[m.type];
     if (!job) return;
     Promise.resolve().then(job).catch((err) => {
       if (m.type === 'download') dlAbort = null;
-      post({ type: 'error', for: m.type, cancelled: err && err.name === 'Cancelled', message: (err && err.message) || String(err) });
+      post({ type: 'error', for: m.type, cancelled: err && err.name === 'Cancelled', message: (err && err.message) || String(err), logs: m.type === 'bench' ? logs.slice(-12) : undefined });
     });
   };
 }

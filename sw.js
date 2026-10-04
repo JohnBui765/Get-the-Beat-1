@@ -3,8 +3,11 @@
 // and this file never deletes it, so updating the app doesn't make you download the engine again.
 // Bump CACHE whenever you upload changed files, so computers pick them up.
 // The "es-" prefix keeps these caches apart from the Echo Loop apps on the same site.
-const CACHE = 'es-app-v1';
+const CACHE = 'es-app-v2';
 const RUNTIME = 'es-ort-1.24.3';
+// The newer runtime the speed check may choose comes from a public CDN; once fetched it is kept here for offline use.
+const CDN = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/';
+const CDN_CACHE = 'es-cdn-ort-1.30.0';
 const SHELL = ['./', './index.html', './engine.js', './manifest.webmanifest', './icon-180.png', './icon-192.png', './icon-512.png'];
 const ORT = ['./ort-1.24.3/ort.min.js', './ort-1.24.3/ort-wasm-simd-threaded.jsep.mjs', './ort-1.24.3/ort-wasm-simd-threaded.jsep.wasm'];
 
@@ -21,7 +24,7 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys()
       .then((keys) => Promise.all(keys
-        .filter((k) => (k.startsWith('es-app-') && k !== CACHE) || (k.startsWith('es-ort-') && k !== RUNTIME))
+        .filter((k) => (k.startsWith('es-app-') && k !== CACHE) || (k.startsWith('es-ort-') && k !== RUNTIME) || (k.startsWith('es-cdn-') && k !== CDN_CACHE))
         .map((k) => caches.delete(k))))
       .then(() => self.clients.claim())
   );
@@ -31,6 +34,15 @@ self.addEventListener('fetch', (event) => {
   const req = event.request;
   if (req.method !== 'GET' || req.headers.has('range')) return;
   const url = new URL(req.url);
+  if (req.url.startsWith(CDN)) {                                  // newer runtime: from the cache, or fetched once and kept
+    event.respondWith(
+      caches.open(CDN_CACHE).then((c) => c.match(req.url).then((hit) => hit || fetch(req.url, { mode: 'cors', credentials: 'omit' }).then((res) => {
+        if (res && res.ok) c.put(req.url, res.clone()).catch(() => {});
+        return res;
+      })))
+    );
+    return;
+  }
   if (url.origin !== self.location.origin) return;                 // the engine download from Hugging Face goes straight through
   const scope = new URL(self.registration.scope).pathname;
   if (!url.pathname.startsWith(scope)) return;
