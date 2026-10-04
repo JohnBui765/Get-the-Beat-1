@@ -1,0 +1,934 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Echo Stems</title>
+<meta name="description" content="Splits a song into its layers on your own computer: vocals out, beat in. Works offline.">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-180.png">
+<style>
+:root{
+  --bg:#F2F2F7; --panel:#FFFFFF; --text:#1C1C1E; --text2:#5E5E66; --text3:#8E8E93;
+  --sep:rgba(60,60,67,.14); --fill:rgba(118,118,128,.12); --fill-strong:rgba(118,118,128,.22);
+  --accent:#0E7490; --accent-ink:#FFFFFF; --tint:rgba(14,116,144,.12); --tint-strong:rgba(14,116,144,.22);
+  --danger:#C42B1C; --good:#1E7F3A;
+  --console:#F7F8FA; --console-line:rgba(60,60,67,.08); --head:#1C1C1E;
+  --l-orig:#6B6B73; --l-vocals:#BE185D; --l-guitar:#047857; --l-piano:#4338CA; --l-other:#7C3AED; --l-bass:#B45309; --l-drums:#475569;
+  --shadow:0 1px 0 rgba(60,60,67,.08);
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#000000; --panel:#1C1C1E; --text:#F2F2F7; --text2:#AEAEB2; --text3:#7C7C82;
+    --sep:rgba(84,84,88,.55); --fill:rgba(118,118,128,.24); --fill-strong:rgba(118,118,128,.36);
+    --accent:#5CCFE6; --accent-ink:#00161B; --tint:rgba(92,207,230,.16); --tint-strong:rgba(92,207,230,.28);
+    --danger:#FF6B61; --good:#32D74B;
+    --console:#121214; --console-line:rgba(255,255,255,.06); --head:#FFFFFF;
+    --l-orig:#AEAEB2; --l-vocals:#F472B6; --l-guitar:#34D399; --l-piano:#A5B4FC; --l-other:#C4B5FD; --l-bass:#FBBF24; --l-drums:#CBD5E1;
+    --shadow:none;
+  }
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif}
+button,input{font:inherit;color:inherit}
+button{cursor:pointer}
+button:disabled{cursor:default}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.wrap{max-width:1080px;margin:0 auto;padding:0 20px 56px}
+[hidden]{display:none!important}
+.tab{font-variant-numeric:tabular-nums}
+
+/* top bar */
+.top{display:flex;align-items:center;gap:12px;padding:18px 0 10px}
+.top img{width:40px;height:40px;border-radius:10px}
+.top h1{font-size:20px;line-height:1.15;margin:0;font-weight:650;letter-spacing:-.01em}
+.top .sub{margin:0;color:var(--text2);font-size:13px}
+.top .spacer{flex:1}
+.badge{font-size:13px;color:var(--good);display:inline-flex;align-items:center;gap:6px}
+.badge::before{content:"";width:8px;height:8px;border-radius:50%;background:currentColor}
+.intro{color:var(--text2);margin:6px 0 18px;max-width:62ch}
+
+/* buttons */
+.btn{border:0;border-radius:10px;padding:8px 14px;background:var(--fill);font-weight:550}
+.btn:hover:not(:disabled){background:var(--fill-strong)}
+.btn.primary{background:var(--accent);color:var(--accent-ink)}
+.btn.primary:hover:not(:disabled){filter:brightness(1.08)}
+.btn.primary:disabled{background:var(--fill);color:var(--text3)}
+.btn.small{padding:5px 10px;font-size:13px;border-radius:8px}
+.link{border:0;background:none;padding:0;color:var(--accent);font-weight:500}
+.link:hover{text-decoration:underline}
+.link.danger{color:var(--danger)}
+.seg{display:inline-flex;background:var(--fill);border-radius:9px;padding:2px;gap:2px}
+.seg button{border:0;background:none;border-radius:7px;padding:4px 12px;font-size:13px;font-weight:550;color:var(--text2)}
+.seg button[aria-pressed="true"]{background:var(--panel);color:var(--text);box-shadow:0 1px 3px rgba(0,0,0,.14)}
+.seg button:disabled{opacity:.45}
+
+/* steps */
+.panel{background:var(--panel);border-radius:14px;box-shadow:var(--shadow)}
+.step{display:grid;grid-template-columns:44px 1fr;gap:4px 14px;padding:18px 20px}
+.step + .step{border-top:1px solid var(--sep)}
+.num{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;font-weight:650;font-size:15px;background:var(--fill);color:var(--text2)}
+.step.done .num{background:var(--tint);color:var(--accent)}
+.step.active .num{background:var(--accent);color:var(--accent-ink)}
+.step h2{font-size:17px;margin:2px 0 4px;font-weight:650}
+.muted{color:var(--text2)}
+.small{font-size:13px}
+.row{display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px;margin-top:10px}
+.ok{color:var(--good);font-weight:550}
+.error{color:var(--danger);margin:10px 0 0}
+.bar{height:6px;border-radius:3px;background:var(--fill);overflow:hidden;flex:1;min-width:180px;max-width:420px}
+.bar > i{display:block;height:100%;width:0;background:var(--accent);transition:width .25s linear}
+@media (prefers-reduced-motion: reduce){.bar > i{transition:none}}
+
+.drop{margin-top:10px;border:1.5px dashed var(--fill-strong);border-radius:12px;padding:18px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;color:var(--text2)}
+.drop.over{border-color:var(--accent);background:var(--tint);color:var(--text)}
+.song-name{font-weight:600;color:var(--text);overflow-wrap:anywhere}
+.overview{position:relative;margin-top:12px;height:64px;border-radius:10px;background:var(--console);overflow:hidden;touch-action:none;cursor:grab}
+.overview.whole{cursor:default}
+.overview canvas{position:absolute;inset:0;width:100%;height:100%}
+
+/* results */
+.results{margin-top:22px}
+.verdict{padding:22px 22px 18px}
+.verdict .big{font-size:30px;line-height:1.15;font-weight:650;letter-spacing:-.015em;margin:0 0 6px}
+.verdict .sub{font-size:17px;margin:0 0 10px;max-width:62ch}
+.verdict .detail{color:var(--text2);font-size:13px;margin:0 0 14px;max-width:80ch}
+.console{margin-top:14px;padding:14px 14px 16px}
+.transport{display:flex;flex-wrap:wrap;align-items:center;gap:10px 16px;padding:2px 4px 12px}
+.play{width:44px;height:44px;border-radius:50%;border:0;background:var(--accent);color:var(--accent-ink);display:grid;place-items:center}
+.play svg{width:18px;height:18px}
+.time{font-size:15px;min-width:92px}
+.hearing{font-weight:600}
+.check{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--text2)}
+.lanes{position:relative;border-radius:10px;background:var(--console);overflow:hidden}
+.lane{display:grid;grid-template-columns:var(--headw,196px) minmax(0,1fr);grid-template-rows:56px;height:56px;overflow:hidden}
+.lane + .lane{border-top:1px solid var(--console-line)}
+.lane-head{display:flex;align-items:center;gap:6px;padding:0 8px 0 10px}
+.lane-name{flex:1;min-width:0;display:flex;align-items:center;gap:8px;border:0;background:none;padding:6px 6px;border-radius:8px;text-align:left;font-weight:600}
+.lane-name:hover:not(:disabled){background:var(--fill)}
+.lane-name:disabled{cursor:default}
+.lane-name .dot{width:10px;height:10px;border-radius:50%;background:var(--c);flex:none}
+.lane-name .state{font-weight:500;font-size:12px;color:var(--text3);margin-left:auto;white-space:nowrap}
+.lane.off .lane-name .label{color:var(--text3);text-decoration:line-through}
+.solo{width:32px;height:32px;border:0;border-radius:8px;background:none;color:var(--text3);display:grid;place-items:center;flex:none}
+.solo:hover{background:var(--fill);color:var(--text)}
+.solo[aria-pressed="true"]{background:var(--c);color:#fff}
+.solo svg{width:18px;height:18px}
+.lane canvas{width:100%;height:56px;display:block;cursor:pointer}
+.playhead{position:absolute;top:0;bottom:0;width:2px;margin-left:-1px;background:var(--head);pointer-events:none;opacity:.85}
+.hint{color:var(--text2);font-size:13px;margin:10px 4px 0}
+.saves{display:flex;flex-wrap:wrap;gap:10px;margin:14px 4px 0}
+
+#toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:rgba(28,28,30,.94);color:#fff;padding:10px 16px;border-radius:12px;font-size:14px;max-width:min(560px,90vw);opacity:0;pointer-events:none;transition:opacity .2s}
+#toast.show{opacity:1}
+@media (prefers-color-scheme: dark){#toast{background:rgba(242,242,247,.96);color:#1C1C1E}}
+@media (max-width:640px){
+  .wrap{padding:0 12px 40px}
+  .step{grid-template-columns:34px 1fr;padding:16px 14px}
+  .lane{--headw:132px}
+  .lane-name .state{display:none}
+  .verdict .big{font-size:24px}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <img src="icon-192.png" alt="">
+    <div>
+      <h1>Echo Stems</h1>
+      <p class="sub">Engine test</p>
+    </div>
+    <div class="spacer"></div>
+    <span id="offlineBadge" class="badge" hidden>Works offline</span>
+    <button id="installBtn" class="btn small" hidden>Install app</button>
+  </header>
+  <p class="intro">Splits a song into its layers on this computer, with nothing uploaded. This test measures how fast your graphics card does it and lets you hear the beat with the vocals taken out.</p>
+
+  <section class="panel" aria-label="Steps">
+    <div class="step" id="stepEngine">
+      <div class="num" aria-hidden="true">1</div>
+      <div>
+        <h2>Get the engine</h2>
+        <p id="gpuLine" class="muted">Checking your graphics card…</p>
+        <div id="engineReady" class="row" hidden>
+          <span class="ok" id="engineReadyText"></span>
+          <button class="link" id="backupBtn">Save a backup copy</button>
+          <button class="link danger" id="removeBtn">Remove</button>
+        </div>
+        <div id="engineMissing" class="row" hidden>
+          <button class="btn primary" id="downloadBtn">Download the engine</button>
+          <span class="muted small">or <button class="link" id="importBtn">load it from a file</button></span>
+          <input type="file" id="importInput" accept=".onnx" hidden>
+        </div>
+        <div id="engineDownloading" hidden>
+          <div class="row">
+            <div class="bar" aria-hidden="true"><i id="dlBar"></i></div>
+            <button class="btn small" id="dlStop">Stop</button>
+          </div>
+          <p class="muted small tab" id="dlText" role="status"></p>
+        </div>
+        <p id="engineError" class="error" hidden></p>
+        <div class="row" id="runOnRow" hidden>
+          <span class="muted small">Run on</span>
+          <div class="seg" role="group" aria-label="Run on">
+            <button data-backend="webgpu" aria-pressed="true">Graphics card</button>
+            <button data-backend="wasm" aria-pressed="false">Processor</button>
+          </div>
+          <span class="muted small" id="runOnNote"></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="step" id="stepSong">
+      <div class="num" aria-hidden="true">2</div>
+      <div>
+        <h2>Choose a song</h2>
+        <div class="drop" id="drop">
+          <span id="dropText">Drop an MP3 here, or</span>
+          <button class="btn small" id="chooseBtn">Choose a song</button>
+          <input type="file" id="songInput" accept="audio/*,.mp3,.m4a,.wav,.flac,.ogg,.aac" hidden>
+        </div>
+        <div id="songBox" hidden>
+          <div class="overview" id="overview" tabindex="0" role="slider" aria-label="Part to test; use the arrow keys to move it" title="Drag the highlighted part to a stretch with singing">
+            <canvas id="overviewCanvas"></canvas>
+          </div>
+          <div class="row">
+            <div class="seg" role="group" aria-label="How much to separate" id="lenSeg">
+              <button data-len="30" aria-pressed="true">30 s</button>
+              <button data-len="60" aria-pressed="false">60 s</button>
+              <button data-len="0" aria-pressed="false">Whole song</button>
+            </div>
+            <span class="tab" id="partText"></span>
+            <button class="link" id="previewBtn">Listen to this part</button>
+          </div>
+          <p class="muted small" id="partHint">Drag the highlighted part to a stretch with singing, so you can judge how well the vocals come out.</p>
+        </div>
+        <p id="songError" class="error" hidden></p>
+      </div>
+    </div>
+
+    <div class="step" id="stepRun">
+      <div class="num" aria-hidden="true">3</div>
+      <div>
+        <h2>Separate</h2>
+        <div class="row">
+          <button class="btn primary" id="runBtn" disabled>Separate</button>
+          <span class="muted small" id="runWhy"></span>
+        </div>
+        <div id="runBox" hidden>
+          <div class="row">
+            <div class="bar" aria-hidden="true"><i id="runBar"></i></div>
+            <button class="btn small" id="runStop">Stop</button>
+          </div>
+          <p class="muted small tab" id="runText" role="status"></p>
+        </div>
+        <p id="runError" class="error" hidden></p>
+      </div>
+    </div>
+  </section>
+
+  <section class="results" id="results" hidden aria-label="Result">
+    <div class="panel verdict">
+      <p class="big tab" id="vBig"></p>
+      <p class="sub" id="vSub"></p>
+      <p class="detail tab" id="vDetail"></p>
+      <button class="btn small" id="copyBtn">Copy report</button>
+    </div>
+
+    <div class="panel console">
+      <div class="transport">
+        <button class="play" id="playBtn" aria-label="Play">
+          <svg id="icPlay" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M7 4.5v15a1 1 0 0 0 1.5.86l12.4-7.5a1 1 0 0 0 0-1.72L8.5 3.64A1 1 0 0 0 7 4.5z"/></svg>
+          <svg id="icPause" viewBox="0 0 24 24" aria-hidden="true" hidden><path fill="currentColor" d="M6 4h4v16H6zM14 4h4v16h-4z"/></svg>
+        </button>
+        <span class="time tab"><span id="tNow">0:00</span> / <span id="tTotal">0:00</span></span>
+        <div class="seg" role="group" aria-label="Quick choices">
+          <button data-preset="original" aria-pressed="false">Original</button>
+          <button data-preset="beat" aria-pressed="true">Beat</button>
+        </div>
+        <label class="check"><input type="checkbox" id="repeat" checked> Repeat</label>
+        <span class="hearing" id="hearing" aria-live="polite"></span>
+      </div>
+      <div class="lanes" id="lanes">
+        <div class="playhead" id="playhead"></div>
+      </div>
+      <p class="hint">Click a layer’s name to take it out of what you hear, or put it back. Click the headphones to hear one layer alone. Click a waveform to jump there. Space plays and pauses.</p>
+      <div class="saves">
+        <button class="btn" id="saveBeat">Save the beat (WAV)</button>
+        <button class="btn" id="saveHearing">Save what you’re hearing</button>
+        <button class="btn" id="saveAll">Save every layer</button>
+      </div>
+    </div>
+  </section>
+</div>
+<div id="toast" role="status" aria-live="polite"></div>
+
+<script>
+'use strict';
+/* ================= helpers ================= */
+const $ = (id) => document.getElementById(id);
+const SR = 44100;
+const MODEL_MB = { f16: 336, f32: 669 };
+const MAX_WHOLE = 8 * 60;                        // longest song separated in one go (memory)
+// model order: bass, drums, other, vocals, guitar, piano. Display order runs from top to bottom.
+const NAMES = ['Bass', 'Drums', 'Other', 'Vocals', 'Guitar', 'Piano'];
+const COLOR_VARS = ['--l-bass', '--l-drums', '--l-other', '--l-vocals', '--l-guitar', '--l-piano'];
+const ORDER = [3, 4, 5, 2, 0, 1];
+const VOCALS = 3;
+const TIPS = { 2: 'Everything that isn’t one of the other five: strings, synths, effects and so on' };
+
+function fmtClock(s) { s = Math.max(0, s); const m = Math.floor(s / 60), r = Math.floor(s % 60); return m + ':' + String(r).padStart(2, '0'); }
+function fmtSec(s) { return (s < 10 ? s.toFixed(1) : String(Math.round(s))) + ' s'; }
+function fmtDur(s) { s = Math.round(s); if (s < 60) return s + ' s'; const m = Math.floor(s / 60), r = s % 60; return m + ' min' + (r ? ' ' + r + ' s' : ''); }
+function mb(n) { return n > 0 && n < 1048576 ? 'under 1 MB' : Math.round(n / 1048576) + ' MB'; }
+function css(v) { return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
+function listJoin(a) { return a.length < 2 ? a.join('') : a.slice(0, -1).join(', ') + ' and ' + a[a.length - 1]; }
+let toastTimer = 0;
+function toast(msg) { const t = $('toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 3200); }
+function saveBlob(blob, name) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+}
+function safeName(s) { return s.replace(/\.[^.]+$/, '').replace(/[<>:"/\\|?*\u0000-\u001f]/g, ' ').replace(/\s+/g, ' ').trim() || 'song'; }
+
+/* ================= state ================= */
+const S = {
+  gpu: null,                 // { webgpu, f16, label, reason }
+  backend: 'webgpu',
+  cached: { f16: 0, f32: 0 },
+  dl: null,                  // { got, total, secs, saving }
+  song: null,                // { name, ab, L, R, dur, peaks }
+  part: { start: 0, len: 30 },
+  running: false,
+  res: null,                 // results
+};
+const kindFor = (backend) => (backend === 'webgpu' && S.gpu && S.gpu.webgpu && !S.gpu.f16 ? 'f32' : 'f16');
+const needKind = () => kindFor(S.backend);
+const engineReady = () => S.cached[needKind()] > 0;
+
+/* ================= service worker, install, offline badge ================= */
+let swReady = false;
+if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
+  navigator.serviceWorker.register('sw.js').then(() => navigator.serviceWorker.ready).then(() => { swReady = true; renderBadge(); }).catch(() => {});
+  navigator.serviceWorker.addEventListener('controllerchange', renderBadge);
+}
+function renderBadge() { $('offlineBadge').hidden = !(swReady && navigator.serviceWorker && navigator.serviceWorker.controller && engineReady()); }
+let installEvt = null;
+window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt = e; $('installBtn').hidden = false; });
+$('installBtn').onclick = async () => { if (!installEvt) return; installEvt.prompt(); try { await installEvt.userChoice; } catch (e) {} installEvt = null; $('installBtn').hidden = true; };
+window.addEventListener('appinstalled', () => { $('installBtn').hidden = true; });
+
+/* ================= worker ================= */
+const worker = new Worker('engine.js');
+worker.onmessage = (e) => {
+  const m = e.data;
+  switch (m.type) {
+    case 'status': S.cached = m.cached; renderEngine(); renderRun(); renderBadge(); break;
+    case 'dl-progress': S.dl = { got: m.got, total: m.total, secs: m.secs, saving: !!m.saving }; renderEngine(); break;
+    case 'dl-done': S.dl = null; toast('Engine saved on this computer. It works without internet now.'); worker.postMessage({ type: 'status' }); break;
+    case 'imported': toast('Engine loaded from the file and saved on this computer.'); worker.postMessage({ type: 'status' }); break;
+    case 'removed': toast('Engine removed from this computer.'); worker.postMessage({ type: 'status' }); break;
+    case 'exported': saveBlob(m.blob, m.file); break;
+    case 'stage': onStage(m); break;
+    case 'progress': onProgress(m); break;
+    case 'result': onResult(m); break;
+    case 'error': onWorkerError(m); break;
+  }
+};
+worker.onerror = (e) => { showRunError('The engine stopped unexpectedly (' + (e.message || 'unknown error') + '). Reload the page and try again.'); };
+
+function onWorkerError(m) {
+  const quota = /quota/i.test(m.message);
+  const msg = quota ? 'There isn’t enough free disk space to save the engine. Free up about 1 GB and try again.' : m.message;
+  if (m.for === 'download') {
+    S.dl = null; renderEngine();
+    if (!m.cancelled) { $('engineError').textContent = msg; $('engineError').hidden = false; }
+  } else if (m.for === 'separate') {
+    S.running = false; renderRun();
+    if (m.cancelled) { $('runText').textContent = 'Stopped.'; $('runBox').hidden = false; $('runBar').style.width = '0'; $('runStop').hidden = true; }
+    else showRunError(msg);
+  } else {
+    $('engineError').textContent = msg; $('engineError').hidden = false;
+  }
+}
+
+/* ================= step 1: engine ================= */
+async function probeGpu() {
+  const g = { webgpu: false, f16: false, label: '', reason: '' };
+  if (!('gpu' in navigator)) { g.reason = 'no-webgpu'; return g; }
+  try {
+    const ad = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
+    if (!ad) { g.reason = 'no-adapter'; return g; }
+    g.webgpu = true;
+    g.f16 = ad.features.has('shader-f16');
+    let info = ad.info;
+    if (!info && ad.requestAdapterInfo) { try { info = await ad.requestAdapterInfo(); } catch (e) { /* hidden */ } }
+    g.label = cardName(info);
+    g.fallback = !!(ad.isFallbackAdapter || (info && info.isFallbackAdapter));
+  } catch (e) { g.reason = 'no-adapter'; }
+  return g;
+}
+function cardName(i) {
+  if (!i) return '';
+  if (i.description) return i.description;
+  const v = (i.vendor || '').toLowerCase();
+  const vendor = { amd: 'AMD', nvidia: 'NVIDIA', intel: 'Intel', apple: 'Apple', qualcomm: 'Qualcomm', arm: 'Arm', microsoft: 'Microsoft' }[v] || i.vendor || '';
+  const arch = (i.architecture || '').replace(/-/g, ' ').replace(/\b(rdna|gcn|cdna)\b/gi, (x) => x.toUpperCase()).replace(/^\w/, (c) => c.toUpperCase());
+  return [vendor, arch && '(' + arch + ')'].filter(Boolean).join(' ');
+}
+
+function renderEngine() {
+  const g = S.gpu;
+  if (g) {
+    let line;
+    if (g.webgpu && g.f16) line = 'Graphics card: ' + (g.label || 'found') + '. It can run the faster 16-bit engine (' + MODEL_MB.f16 + ' MB).';
+    else if (g.webgpu) line = 'Graphics card: ' + (g.label || 'found') + '. It lacks 16-bit maths, so it needs the larger 32-bit engine (' + MODEL_MB.f32 + ' MB).';
+    else line = 'This browser can’t use your graphics card. Use Chrome or Edge, and check that “Use graphics acceleration” is on in its settings. You can still run the test on the processor, but it is far slower.';
+    if (g.fallback) line += ' (This is a software stand-in for a graphics card, so it will be slow.)';
+    $('gpuLine').textContent = line;
+    $('runOnRow').hidden = false;
+    for (const b of document.querySelectorAll('[data-backend]')) {
+      b.setAttribute('aria-pressed', String(b.dataset.backend === S.backend));
+      if (b.dataset.backend === 'webgpu') b.disabled = !g.webgpu;
+    }
+    $('runOnNote').textContent = S.backend === 'wasm' ? 'Much slower: use it only to compare.' : '';
+  }
+  const kind = needKind(), ready = engineReady(), downloading = !!S.dl;
+  $('engineReady').hidden = !ready || downloading;
+  $('engineMissing').hidden = ready || downloading || !g;
+  $('engineDownloading').hidden = !downloading;
+  if (ready) $('engineReadyText').textContent = 'Engine saved on this computer (' + mb(S.cached[kind]) + '). It works without internet.';
+  $('downloadBtn').textContent = 'Download the engine (' + MODEL_MB[kind] + ' MB, once)';
+  if (downloading) {
+    const d = S.dl, pct = d.total ? Math.min(1, d.got / d.total) : 0;
+    $('dlBar').style.width = (pct * 100).toFixed(1) + '%';
+    if (d.saving) { $('dlText').textContent = 'Saving it on this computer…'; $('dlStop').hidden = true; }
+    else {
+      $('dlStop').hidden = false;
+      const rate = d.secs > 0.5 ? d.got / d.secs : 0;
+      const left = rate ? (d.total - d.got) / rate : 0;
+      $('dlText').textContent = mb(d.got) + ' of ' + mb(d.total) + (rate ? ', ' + (rate / 1048576).toFixed(1) + ' MB/s, about ' + fmtDur(left) + ' left' : '');
+    }
+  }
+  $('stepEngine').classList.toggle('done', ready);
+  $('stepEngine').classList.toggle('active', !ready);
+}
+
+for (const b of document.querySelectorAll('[data-backend]')) {
+  b.onclick = () => {
+    if (S.running) return;
+    S.backend = b.dataset.backend;
+    try { localStorage.setItem('es-backend', S.backend); } catch (e) { /* private mode */ }
+    renderEngine(); renderRun(); renderBadge();
+  };
+}
+$('downloadBtn').onclick = async () => {
+  $('engineError').hidden = true;
+  try { if (navigator.storage && navigator.storage.persist) await navigator.storage.persist(); } catch (e) { /* not granted */ }
+  S.dl = { got: 0, total: MODEL_MB[needKind()] * 1048576, secs: 0 };
+  renderEngine();
+  worker.postMessage({ type: 'download', kind: needKind() });
+};
+$('dlStop').onclick = () => worker.postMessage({ type: 'cancel-download' });
+$('importBtn').onclick = () => $('importInput').click();
+$('importInput').onchange = () => {
+  const f = $('importInput').files[0];
+  $('importInput').value = '';
+  if (!f) return;
+  $('engineError').hidden = true;
+  if (!/\.onnx$/i.test(f.name)) { $('engineError').textContent = 'Choose the engine file: its name ends in .onnx.'; $('engineError').hidden = false; return; }
+  worker.postMessage({ type: 'import', file: f });
+  toast('Saving the engine from the file…');
+};
+$('backupBtn').onclick = () => { worker.postMessage({ type: 'export', kind: needKind() }); toast('Preparing the copy. Your browser will ask where to save it.'); };
+$('removeBtn').onclick = () => {
+  if (S.running) return;
+  if (confirm('Remove the engine from this computer? You would need to download it again (' + MODEL_MB[needKind()] + ' MB) to use the app.')) worker.postMessage({ type: 'remove', kind: needKind() });
+};
+
+/* ================= step 2: song ================= */
+let ac = null;                                           // one AudioContext for everything you hear
+function audioCtx() {
+  if (!ac) {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    try { ac = new AC({ sampleRate: SR, latencyHint: 'interactive' }); } catch (e) { ac = new AC(); }
+  }
+  if (ac.state === 'suspended') ac.resume();
+  return ac;
+}
+
+$('chooseBtn').onclick = () => $('songInput').click();
+$('songInput').onchange = () => { const f = $('songInput').files[0]; $('songInput').value = ''; if (f) loadSong(f); };
+const drop = $('drop');
+['dragenter', 'dragover'].forEach((t) => window.addEventListener(t, (e) => { e.preventDefault(); if (!S.running) drop.classList.add('over'); }));
+['dragleave', 'drop'].forEach((t) => window.addEventListener(t, (e) => { e.preventDefault(); if (t === 'drop' || e.target === document.documentElement || !e.relatedTarget) drop.classList.remove('over'); }));
+window.addEventListener('drop', (e) => {
+  const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+  if (!f) return;
+  if (/\.onnx$/i.test(f.name)) { $('engineError').hidden = true; worker.postMessage({ type: 'import', file: f }); toast('Saving the engine from the file…'); return; }
+  if (!S.running) loadSong(f);
+});
+
+async function loadSong(file) {
+  $('songError').hidden = true;
+  stopPreview();
+  $('dropText').textContent = 'Opening ' + file.name + '…';
+  try {
+    const bytes = await file.arrayBuffer();
+    const off = new (window.OfflineAudioContext || window.webkitOfflineAudioContext)(2, SR, SR);
+    const ab = await off.decodeAudioData(bytes);           // resampled to 44.1 kHz, the rate the engine needs
+    const L = ab.getChannelData(0), R = ab.numberOfChannels > 1 ? ab.getChannelData(1) : L;
+    S.song = { name: file.name, ab, L, R, dur: ab.duration, peaks: null };
+    const len = S.part.len || 0;
+    S.part.start = len ? Math.max(0, Math.min(ab.duration - len, ab.duration * 0.35 - len / 2)) : 0;
+    $('dropText').textContent = '';
+    const n = document.createElement('span'); n.className = 'song-name'; n.textContent = file.name + ' (' + fmtClock(ab.duration) + ')';
+    $('dropText').appendChild(n);
+    $('chooseBtn').textContent = 'Choose another song';
+    $('songBox').hidden = false;
+    requestAnimationFrame(() => { drawOverview(); renderPart(); renderRun(); });
+  } catch (err) {
+    $('dropText').textContent = S.song ? '' : 'Drop an MP3 here, or';
+    if (S.song) { const n = document.createElement('span'); n.className = 'song-name'; n.textContent = S.song.name; $('dropText').appendChild(n); }
+    $('songError').textContent = 'This file couldn’t be opened as audio. Try an MP3, M4A, WAV or FLAC file.';
+    $('songError').hidden = false;
+  }
+}
+
+function partBounds() {
+  const s = S.song; if (!s) return [0, 0];
+  if (!S.part.len || S.part.len >= s.dur) return [0, s.dur];
+  const a = Math.max(0, Math.min(s.dur - S.part.len, S.part.start));
+  return [a, a + S.part.len];
+}
+function renderPart() {
+  const s = S.song; if (!s) return;
+  const [a, b] = partBounds(), whole = b - a >= s.dur - 1e-6;
+  $('partText').textContent = whole ? 'The whole song, ' + fmtClock(s.dur) : 'Part to test: ' + fmtClock(a) + ' to ' + fmtClock(b);
+  $('partHint').hidden = whole;
+  $('overview').classList.toggle('whole', whole);
+  for (const btn of $('lenSeg').querySelectorAll('button')) btn.setAttribute('aria-pressed', String(Number(btn.dataset.len) === S.part.len));
+  drawOverview();
+}
+for (const btn of $('lenSeg').querySelectorAll('button')) {
+  btn.onclick = () => {
+    if (S.running) return;
+    const [a, b] = partBounds(), mid = (a + b) / 2;
+    S.part.len = Number(btn.dataset.len);
+    if (S.part.len && S.song) S.part.start = Math.max(0, Math.min(S.song.dur - S.part.len, mid - S.part.len / 2));
+    stopPreview(); renderPart(); renderRun();
+  };
+}
+
+function peaksOf(L, R, from, to, W) {
+  const mn = new Float32Array(W), mx = new Float32Array(W), n = to - from, step = n / W;
+  for (let x = 0; x < W; x++) {
+    const i0 = from + Math.floor(x * step), i1 = Math.min(to, from + Math.max(Math.floor((x + 1) * step), Math.floor(x * step) + 1));
+    let lo = 0, hi = 0;
+    const stride = Math.max(1, Math.floor((i1 - i0) / 2048));
+    for (let i = i0; i < i1; i += stride) { const v = (L[i] + R[i]) * 0.5; if (v < lo) lo = v; else if (v > hi) hi = v; }
+    mn[x] = lo; mx[x] = hi;
+  }
+  return { mn, mx };
+}
+function sizeCanvas(cv) {
+  const r = cv.getBoundingClientRect(), d = window.devicePixelRatio || 1;
+  const w = Math.max(1, Math.round(r.width * d)), h = Math.max(1, Math.round(r.height * d));
+  if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
+  return { w, h };
+}
+function peakOf(pk) { let m = 0; for (let x = 0; x < pk.mn.length; x++) m = Math.max(m, -pk.mn[x], pk.mx[x]); return m; }
+// Waveforms are scaled to the loudest moment of the original, so quiet recordings still show their shape
+// and every layer keeps its true size relative to the others.
+function gainFor(peak) { return peak > 0 ? Math.min(6, 0.98 / peak) : 1; }
+function drawEnvelope(ctx, pk, w, h, color, alpha, gain = 1) {
+  ctx.globalAlpha = alpha; ctx.fillStyle = color;
+  const mid = h / 2, amp = h * 0.46 * gain;
+  for (let x = 0; x < w; x++) {
+    const top = mid - pk.mx[x] * amp, bot = mid - pk.mn[x] * amp;
+    ctx.fillRect(x, top, 1, Math.max(1, bot - top));
+  }
+  ctx.globalAlpha = 1;
+}
+function drawOverview() {
+  const s = S.song, cv = $('overviewCanvas'); if (!s) return;
+  const { w, h } = sizeCanvas(cv);
+  if (!s.peaks || s.peaks.mn.length !== w) { s.peaks = peaksOf(s.L, s.R, 0, s.L.length, w); s.gain = gainFor(peakOf(s.peaks)); }
+  const ctx = cv.getContext('2d');
+  ctx.clearRect(0, 0, w, h);
+  const [a, b] = partBounds(), xa = (a / s.dur) * w, xb = (b / s.dur) * w;
+  ctx.fillStyle = css('--tint-strong'); ctx.fillRect(xa, 0, xb - xa, h);
+  drawEnvelope(ctx, s.peaks, w, h, css('--l-orig'), 0.55, s.gain);
+  ctx.save(); ctx.beginPath(); ctx.rect(xa, 0, xb - xa, h); ctx.clip();
+  drawEnvelope(ctx, s.peaks, w, h, css('--accent'), 1, s.gain);
+  ctx.restore();
+  ctx.fillStyle = css('--accent');
+  if (b - a < s.dur - 1e-6) { ctx.fillRect(Math.round(xa), 0, 2 * (window.devicePixelRatio || 1), h); ctx.fillRect(Math.round(xb) - 2 * (window.devicePixelRatio || 1), 0, 2 * (window.devicePixelRatio || 1), h); }
+}
+(() => {
+  const ov = $('overview');
+  let drag = null;
+  ov.addEventListener('pointerdown', (e) => {
+    const s = S.song; if (!s || S.running) return;
+    const [a, b] = partBounds(); if (b - a >= s.dur - 1e-6) return;
+    const r = ov.getBoundingClientRect(), t = ((e.clientX - r.left) / r.width) * s.dur;
+    if (t < a || t > b) S.part.start = Math.max(0, Math.min(s.dur - S.part.len, t - S.part.len / 2));
+    drag = { x0: e.clientX, s0: S.part.start, w: r.width };
+    ov.setPointerCapture(e.pointerId); stopPreview(); renderPart();
+  });
+  ov.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    const s = S.song, dt = ((e.clientX - drag.x0) / drag.w) * s.dur;
+    S.part.start = Math.max(0, Math.min(s.dur - S.part.len, drag.s0 + dt));
+    renderPart();
+  });
+  const end = () => { if (drag) { drag = null; renderRun(); } };
+  ov.addEventListener('pointerup', end); ov.addEventListener('pointercancel', end);
+  ov.addEventListener('keydown', (e) => {
+    const s = S.song; if (!s || S.running || !S.part.len || S.part.len >= s.dur) return;
+    const d = e.key === 'ArrowLeft' ? -5 : e.key === 'ArrowRight' ? 5 : 0;
+    if (!d) return;
+    e.preventDefault(); e.stopPropagation();
+    S.part.start = Math.max(0, Math.min(s.dur - S.part.len, S.part.start + (e.shiftKey ? d * 4 : d)));
+    stopPreview(); renderPart(); renderRun();
+  });
+})();
+
+let preview = null;
+$('previewBtn').onclick = () => {
+  if (preview) { stopPreview(); return; }
+  if (!S.song) return;
+  pause();
+  const ctx = audioCtx(), [a, b] = partBounds();
+  const src = ctx.createBufferSource(); src.buffer = S.song.ab; src.connect(ctx.destination);
+  src.onended = () => { if (preview === src) stopPreview(); };
+  src.start(ctx.currentTime + 0.03, a, b - a);
+  preview = src; $('previewBtn').textContent = 'Stop listening';
+};
+function stopPreview() { if (preview) { const p = preview; preview = null; try { p.stop(); } catch (e) { /* ended */ } } $('previewBtn').textContent = 'Listen to this part'; }
+
+/* ================= step 3: separate ================= */
+function renderRun() {
+  const s = S.song, [a, b] = partBounds();
+  let why = '';
+  if (!S.gpu) why = 'Checking your computer…';
+  else if (!engineReady()) why = 'Get the engine first.';
+  else if (!s) why = 'Choose a song first.';
+  else if (b - a > MAX_WHOLE) why = 'This song is longer than ' + (MAX_WHOLE / 60) + ' minutes. Test a part of it instead.';
+  const btn = $('runBtn');
+  btn.disabled = !!why || S.running || !!S.dl;
+  if (s) btn.textContent = b - a >= s.dur - 1e-6 ? 'Separate the whole song (' + fmtClock(s.dur) + ')' : 'Separate ' + fmtClock(a) + ' to ' + fmtClock(b);
+  $('runWhy').textContent = S.running ? '' : why;
+  $('stepSong').classList.toggle('done', !!s);
+  $('stepSong').classList.toggle('active', engineReady() && !s);
+  $('stepRun').classList.toggle('active', !why);
+}
+let runInfo = null;
+$('runBtn').onclick = () => {
+  const s = S.song; if (!s || S.running) return;
+  stopPreview(); pause();
+  const [a, b] = partBounds();
+  const i0 = Math.round(a * SR), i1 = Math.min(s.L.length, Math.round(b * SR));
+  const L = s.L.slice(i0, i1), R = s.R.slice(i0, i1);
+  runInfo = { name: s.name, a, b, dur: (i1 - i0) / SR, origL: s.L.slice(i0, i1), origR: s.R.slice(i0, i1), t0: performance.now(), backend: S.backend, kind: needKind(), segMs: [], total: 0 };
+  S.running = true;
+  $('runError').hidden = true; $('runBox').hidden = false; $('runStop').hidden = false;
+  $('runBar').style.width = '0'; $('runText').textContent = 'Starting…';
+  renderRun();
+  worker.postMessage({ type: 'separate', L, R, kind: needKind(), backend: S.backend }, [L.buffer, R.buffer]);
+};
+$('runStop').onclick = () => worker.postMessage({ type: 'cancel' });
+function onStage(m) {
+  if (m.stage === 'loading') $('runText').textContent = runInfo.backend === 'webgpu' ? 'Loading the engine onto the graphics card…' : 'Loading the engine into the processor…';
+  if (m.stage === 'running') { runInfo.total = m.total; runInfo.tRun = performance.now(); $('runText').textContent = 'Chunk 1 of ' + m.total + '.' + (runInfo.backend === 'webgpu' ? ' The first one takes longer while the graphics card gets ready.' : ''); }
+}
+function onProgress(p) {
+  runInfo.segMs.push(p.segMs);
+  $('runBar').style.width = ((p.done / p.total) * 100).toFixed(1) + '%';
+  if (p.done >= p.total) { $('runText').textContent = 'Putting the layers together…'; return; }
+  const steady = runInfo.segMs.length > 1 ? runInfo.segMs.slice(1).reduce((x, y) => x + y, 0) / (runInfo.segMs.length - 1) : runInfo.segMs[0];
+  $('runText').textContent = 'Chunk ' + (p.done + 1) + ' of ' + p.total + ', about ' + fmtDur(((p.total - p.done) * steady) / 1000) + ' left.';
+}
+function showRunError(msg) { S.running = false; renderRun(); $('runBox').hidden = true; $('runError').textContent = msg; $('runError').hidden = false; }
+
+/* ================= results ================= */
+const M = { bufs: null, on: [true, true, true, false, true, true], solo: -1, playing: false, offset: 0, when: 0, srcs: [], gains: [], master: null, dur: 0 };
+
+function onResult(m) {
+  S.running = false; renderRun();
+  $('runBox').hidden = true;
+  const info = runInfo, t = m.timing, n = info.origL.length;
+  // sound for playback: the original part plus the six layers
+  const mk = (l, r) => { const b = new AudioBuffer({ numberOfChannels: 2, length: n, sampleRate: SR }); b.copyToChannel(l, 0); b.copyToChannel(r, 1); return b; };
+  stopAll();
+  M.bufs = { orig: mk(info.origL, info.origR), stems: m.stems.map((st) => mk(st.L, st.R)) };
+  info.origL = info.origR = null;
+  M.dur = n / SR; M.offset = 0; M.on = [true, true, true, false, true, true]; M.solo = -1;
+  S.res = { info, t, name: info.name };
+  renderVerdict();
+  $('results').hidden = false;
+  buildLanes();
+  renderMix();
+  $('tTotal').textContent = fmtClock(M.dur); $('tNow').textContent = '0:00';
+  $('results').scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
+}
+
+function timingNumbers() {
+  const { info, t } = S.res;
+  const seg = t.segMs, first = seg[0] / 1000;
+  const steady = seg.length > 1 ? seg.slice(1).reduce((x, y) => x + y, 0) / (seg.length - 1) / 1000 : first;
+  const total = t.totalMs / 1000;
+  const est4 = first + 79 * steady;                     // a 4-minute song is 80 chunks
+  return { first, steady, total, est4, load: t.loadMs / 1000, ratio: info.dur / total, chunks: t.nSeg };
+}
+function deviceText() {
+  const { t } = S.res;
+  const engine = t.kind === 'f32' ? '32-bit engine' : '16-bit engine';
+  if (t.backend === 'webgpu') {
+    const a = t.adapter ? cardName(t.adapter) : (S.gpu && S.gpu.label) || '';
+    return 'graphics card' + (a ? ' (' + a + ')' : '') + ', ' + engine;
+  }
+  return 'processor, ' + engine;
+}
+function renderVerdict() {
+  const { info } = S.res, x = timingNumbers();
+  $('vBig').textContent = fmtSec(info.dur) + ' of music took ' + fmtSec(x.total) + '.';
+  const speed = x.ratio >= 1 ? 'That’s ' + x.ratio.toFixed(1) + '× faster than playing it.' : 'That’s ' + (1 / x.ratio).toFixed(1) + '× slower than playing it.';
+  $('vSub').textContent = speed + ' A 4-minute song would take about ' + fmtDur(x.est4) + '.';
+  let d = 'Ran on the ' + deviceText() + '. ';
+  if (S.res.t.freshSession) d += 'Loading the engine took ' + fmtSec(x.load) + ' (once each time the app opens). ';
+  d += x.chunks > 1
+    ? 'The first of ' + x.chunks + ' chunks took ' + fmtSec(x.first) + '; the rest took ' + fmtSec(x.steady) + ' each on average.'
+    : 'It was one chunk, ' + fmtSec(x.first) + '.';
+  $('vDetail').textContent = d;
+}
+function reportText() {
+  const { info, t } = S.res, x = timingNumbers();
+  const ua = navigator.userAgentData ? navigator.userAgentData.brands.map((b) => b.brand + ' ' + b.version).filter((s) => !/Not/.test(s)).join(', ') + '; ' + (navigator.userAgentData.platform || '') : navigator.userAgent;
+  return [
+    'Echo Stems engine test',
+    'Song: ' + info.name + ', ' + fmtClock(info.a) + ' to ' + fmtClock(info.b) + ' (' + fmtSec(info.dur) + ')',
+    'Ran on: ' + deviceText(),
+    'Separation: ' + fmtSec(x.total) + ' for ' + fmtSec(info.dur) + ' of music (' + x.ratio.toFixed(2) + '× real time)',
+    'Chunks: ' + x.chunks + '; first ' + x.first.toFixed(2) + ' s; later ' + x.steady.toFixed(2) + ' s on average',
+    'Sound maths (spectrograms): ' + (t.dspMs / 1000).toFixed(2) + ' s in total',
+    'Engine loading: ' + (t.freshSession ? x.load.toFixed(2) + ' s' : 'already loaded'),
+    'Estimate for a 4-minute song: ' + fmtDur(x.est4),
+    'Graphics card check: ' + (S.gpu ? (S.gpu.webgpu ? 'WebGPU yes, 16-bit ' + (S.gpu.f16 ? 'yes' : 'no') + (S.gpu.label ? ', ' + S.gpu.label : '') : 'WebGPU not available (' + S.gpu.reason + ')') : 'not checked'),
+    'Browser: ' + ua,
+  ].join('\n');
+}
+$('copyBtn').onclick = async () => {
+  try { await navigator.clipboard.writeText(reportText()); toast('Report copied. Paste it into our chat.'); }
+  catch (e) { prompt('Copy this report:', reportText()); }
+};
+
+/* lanes */
+let lanePeaks = null;
+function buildLanes() {
+  const box = $('lanes');
+  for (const el of box.querySelectorAll('.lane')) el.remove();
+  const rows = [{ i: -1, name: 'Original', color: '--l-orig' }].concat(ORDER.map((i) => ({ i, name: NAMES[i], color: COLOR_VARS[i] })));
+  for (const r of rows) {
+    const lane = document.createElement('div');
+    lane.className = 'lane'; lane.dataset.i = r.i;
+    lane.style.setProperty('--c', 'var(' + r.color + ')');
+    const head = document.createElement('div'); head.className = 'lane-head';
+    const nameBtn = document.createElement('button'); nameBtn.className = 'lane-name';
+    nameBtn.innerHTML = '<span class="dot"></span><span class="label"></span><span class="state"></span>';
+    nameBtn.querySelector('.label').textContent = r.name;
+    if (r.i < 0) { nameBtn.disabled = true; nameBtn.title = 'The song as it was, for comparison'; }
+    else {
+      nameBtn.title = TIPS[r.i] || ('Take the ' + r.name.toLowerCase() + ' out, or put it back');
+      nameBtn.onclick = () => { M.solo = -1; M.on[r.i] = !M.on[r.i]; renderMix(); };
+    }
+    head.appendChild(nameBtn);
+    if (r.i >= 0) {
+      const solo = document.createElement('button'); solo.className = 'solo'; solo.setAttribute('aria-pressed', 'false');
+      solo.setAttribute('aria-label', 'Hear the ' + r.name.toLowerCase() + ' alone'); solo.title = 'Hear the ' + r.name.toLowerCase() + ' alone';
+      solo.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M4 15v-3a8 8 0 0 1 16 0v3"/><rect x="3" y="14" width="5" height="7" rx="1.6" fill="currentColor"/><rect x="16" y="14" width="5" height="7" rx="1.6" fill="currentColor"/></svg>';
+      solo.onclick = () => { M.solo = M.solo === r.i ? -1 : r.i; renderMix(); };
+      head.appendChild(solo);
+    }
+    const cv = document.createElement('canvas');
+    cv.setAttribute('aria-label', r.name + ' waveform; click to jump');
+    cv.onclick = (e) => { const b = cv.getBoundingClientRect(); seek(((e.clientX - b.left) / b.width) * M.dur); };
+    lane.appendChild(head); lane.appendChild(cv);
+    box.appendChild(lane);
+  }
+  lanePeaks = null;
+  requestAnimationFrame(drawLanes);
+}
+function laneAlpha(i) {
+  if (M.solo >= 0) return i === M.solo ? 1 : 0.2;
+  if (i < 0) return 1;
+  return M.on[i] ? 1 : 0.2;
+}
+function drawLanes() {
+  if (!M.bufs) return;
+  const lanes = [...$('lanes').querySelectorAll('.lane')];
+  if (!lanes.length) return;
+  const w0 = sizeCanvas(lanes[0].querySelector('canvas')).w;
+  if (!lanePeaks || lanePeaks.w !== w0) {
+    const n = M.bufs.orig.length, pk = (b) => peaksOf(b.getChannelData(0), b.getChannelData(1), 0, n, w0);
+    lanePeaks = { w: w0, orig: pk(M.bufs.orig), stems: M.bufs.stems.map(pk) };
+    lanePeaks.gain = gainFor(peakOf(lanePeaks.orig));
+  }
+  for (const lane of lanes) {
+    const i = Number(lane.dataset.i), cv = lane.querySelector('canvas');
+    const { w, h } = sizeCanvas(cv), ctx = cv.getContext('2d');
+    ctx.clearRect(0, 0, w, h);
+    const pk = i < 0 ? lanePeaks.orig : lanePeaks.stems[i];
+    if (pk.mn.length === w) drawEnvelope(ctx, pk, w, h, css(i < 0 ? '--l-orig' : COLOR_VARS[i]), laneAlpha(i), lanePeaks.gain);
+  }
+  placeHead();
+}
+let resizeT = 0;
+window.addEventListener('resize', () => { clearTimeout(resizeT); resizeT = setTimeout(() => { drawOverview(); drawLanes(); }, 120); });
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { drawOverview(); drawLanes(); });
+
+/* mixing: the original with layers taken out (so nothing the engine couldn't place is lost), or one layer alone */
+function targetGains() {
+  const g = new Array(7).fill(0);
+  if (M.solo >= 0) g[1 + M.solo] = 1;
+  else { g[0] = 1; for (let s = 0; s < 6; s++) if (!M.on[s]) g[1 + s] = -1; }
+  return g;
+}
+function hearingLabel() {
+  if (M.solo >= 0) return NAMES[M.solo] + ' alone';
+  const offs = ORDER.filter((s) => !M.on[s]);
+  if (!offs.length) return 'Original';
+  const rest = offs.filter((s) => s !== VOCALS).map((s) => NAMES[s].toLowerCase());
+  if (offs.includes(VOCALS)) return rest.length ? 'Beat without ' + listJoin(rest) : 'Beat (no vocals)';
+  return 'Original without ' + listJoin(rest);
+}
+function renderMix() {
+  const g = targetGains();
+  if (M.playing && ac) { const t = ac.currentTime; M.gains.forEach((node, k) => node.gain.setTargetAtTime(g[k], t, 0.008)); }
+  $('hearing').textContent = 'Now: ' + hearingLabel();
+  const isOrig = M.solo < 0 && M.on.every(Boolean), isBeat = M.solo < 0 && M.on.every((v, s) => v === (s !== VOCALS));
+  document.querySelector('[data-preset="original"]').setAttribute('aria-pressed', String(isOrig));
+  document.querySelector('[data-preset="beat"]').setAttribute('aria-pressed', String(isBeat));
+  for (const lane of $('lanes').querySelectorAll('.lane')) {
+    const i = Number(lane.dataset.i); if (i < 0) continue;
+    const off = M.solo >= 0 ? i !== M.solo : !M.on[i];
+    lane.classList.toggle('off', off);
+    lane.querySelector('.lane-name').setAttribute('aria-pressed', String(!off));
+    lane.querySelector('.state').textContent = M.solo === i ? 'alone' : (M.on[i] ? '' : 'taken out');
+    lane.querySelector('.solo').setAttribute('aria-pressed', String(M.solo === i));
+  }
+  drawLanes();
+}
+for (const b of document.querySelectorAll('[data-preset]')) {
+  b.onclick = () => { M.solo = -1; M.on = b.dataset.preset === 'beat' ? [true, true, true, false, true, true] : [true, true, true, true, true, true]; renderMix(); };
+}
+
+/* playback: seven sources started on the same sample, mixed by gain (a gain of -1 takes a layer out) */
+function position() {
+  if (!M.playing || !ac) return M.offset;
+  const p = M.offset + (ac.currentTime - M.when);
+  return $('repeat').checked ? ((p % M.dur) + M.dur) % M.dur : Math.min(p, M.dur);
+}
+function play() {
+  if (!M.bufs) return;
+  stopPreview();
+  const ctx = audioCtx();
+  if (M.offset >= M.dur - 0.01) M.offset = 0;
+  if (!M.master) { M.master = ctx.createGain(); M.master.connect(ctx.destination); }
+  const g = targetGains(), when = ctx.currentTime + 0.04;
+  const bufs = [M.bufs.orig].concat(M.bufs.stems);
+  M.srcs = []; M.gains = [];
+  bufs.forEach((b, k) => {
+    const src = ctx.createBufferSource(); src.buffer = b; src.loop = $('repeat').checked;
+    const gn = ctx.createGain(); gn.gain.value = g[k];
+    src.connect(gn); gn.connect(M.master);
+    src.start(when, M.offset);
+    M.srcs.push(src); M.gains.push(gn);
+  });
+  M.srcs[0].onended = () => { if (M.playing && !$('repeat').checked && M.srcs[0] && M.srcs[0].__mine) { M.playing = false; M.offset = M.dur; teardown(); renderPlay(); } };
+  M.srcs[0].__mine = true;
+  M.when = when; M.playing = true;
+  renderPlay(); tick();
+}
+function teardown() { for (const s of M.srcs) { s.onended = null; try { s.stop(); } catch (e) { /* not started */ } s.disconnect(); } for (const g of M.gains) g.disconnect(); M.srcs = []; M.gains = []; }
+function pause() { if (!M.playing) return; M.offset = position(); M.playing = false; teardown(); renderPlay(); }
+function stopAll() { if (M.playing) { M.playing = false; teardown(); } M.offset = 0; renderPlay(); }
+function seek(t) { t = Math.max(0, Math.min(M.dur - 0.01, t)); if (M.playing) { M.playing = false; teardown(); M.offset = t; play(); } else { M.offset = t; placeHead(); $('tNow').textContent = fmtClock(t); } }
+function renderPlay() { $('icPlay').hidden = M.playing; $('icPause').hidden = !M.playing; $('playBtn').setAttribute('aria-label', M.playing ? 'Pause' : 'Play'); placeHead(); }
+function placeHead() {
+  const lanes = $('lanes'), first = lanes.querySelector('.lane canvas');
+  if (!first || !M.dur) return;
+  const lb = lanes.getBoundingClientRect(), cb = first.getBoundingClientRect();
+  $('playhead').style.left = (cb.left - lb.left + (position() / M.dur) * cb.width) + 'px';
+}
+function tick() { if (!M.playing) return; const p = position(); $('tNow').textContent = fmtClock(p); placeHead(); requestAnimationFrame(tick); }
+$('playBtn').onclick = () => (M.playing ? pause() : play());
+$('repeat').onchange = () => { if (M.playing) { const p = position(); M.playing = false; teardown(); M.offset = p; play(); } };
+document.addEventListener('keydown', (e) => {
+  if (!M.bufs || e.ctrlKey || e.metaKey || e.altKey) return;
+  const tag = (e.target && e.target.tagName) || '';
+  if (/INPUT|TEXTAREA|SELECT/.test(tag)) return;
+  if (e.code === 'Space') { e.preventDefault(); M.playing ? pause() : play(); }
+  else if (e.key === 'b' || e.key === 'B') document.querySelector('[data-preset="beat"]').click();
+  else if (e.key === 'o' || e.key === 'O') document.querySelector('[data-preset="original"]').click();
+});
+
+/* saving WAV files (16-bit, 44.1 kHz, stereo) */
+function wavFrom(fill, n) {
+  const bytes = 44 + n * 4, buf = new ArrayBuffer(bytes), v = new DataView(buf);
+  const w = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  w(0, 'RIFF'); v.setUint32(4, bytes - 8, true); w(8, 'WAVE'); w(12, 'fmt '); v.setUint32(16, 16, true);
+  v.setUint16(20, 1, true); v.setUint16(22, 2, true); v.setUint32(24, SR, true); v.setUint32(28, SR * 4, true);
+  v.setUint16(32, 4, true); v.setUint16(34, 16, true); w(36, 'data'); v.setUint32(40, n * 4, true);
+  const pcm = new Int16Array(buf, 44, n * 2);
+  fill(pcm);
+  return new Blob([buf], { type: 'audio/wav' });
+}
+const q = (x) => { x = x < -1 ? -1 : x > 1 ? 1 : x; return Math.round(x < 0 ? x * 32768 : x * 32767); };
+function wavOfGains(g) {
+  const n = M.bufs.orig.length, chans = [M.bufs.orig].concat(M.bufs.stems).map((b) => [b.getChannelData(0), b.getChannelData(1)]);
+  const used = g.map((x, k) => [x, k]).filter(([x]) => x !== 0);
+  return wavFrom((pcm) => {
+    for (let i = 0; i < n; i++) {
+      let l = 0, r = 0;
+      for (const [x, k] of used) { l += x * chans[k][0][i]; r += x * chans[k][1][i]; }
+      pcm[2 * i] = q(l); pcm[2 * i + 1] = q(r);
+    }
+  }, n);
+}
+function fileName(label) {
+  const { info } = S.res, whole = info.b - info.a >= (S.song ? S.song.dur : info.b) - 1e-6;
+  const part = whole ? '' : ' ' + fmtClock(info.a).replace(':', '.') + '-' + fmtClock(info.b).replace(':', '.');
+  return safeName(info.name) + part + ' - ' + label.toLowerCase() + '.wav';
+}
+$('saveBeat').onclick = () => { const g = new Array(7).fill(0); g[0] = 1; g[1 + VOCALS] = -1; saveBlob(wavOfGains(g), fileName('beat')); };
+$('saveHearing').onclick = () => saveBlob(wavOfGains(targetGains()), fileName(hearingLabel().replace(/[()]/g, '')));
+$('saveAll').onclick = async () => {
+  toast('Saving six files. If Chrome asks, allow this site to download several files.');
+  for (const s of ORDER) {
+    const g = new Array(7).fill(0); g[1 + s] = 1;
+    saveBlob(wavOfGains(g), fileName(NAMES[s]));
+    await new Promise((r) => setTimeout(r, 450));
+  }
+};
+
+/* ================= start ================= */
+try { const b = localStorage.getItem('es-backend'); if (b === 'webgpu' || b === 'wasm') S.backend = b; } catch (e) { /* private mode */ }
+probeGpu().then((g) => {
+  S.gpu = g;
+  if (!g.webgpu) S.backend = 'wasm';
+  renderEngine(); renderRun(); renderBadge();
+});
+worker.postMessage({ type: 'status' });
+renderRun();
+</script>
+</body>
+</html>
