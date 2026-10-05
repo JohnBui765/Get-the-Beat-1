@@ -166,12 +166,17 @@ p{margin:0}
 .clock{font-stretch:78%;font-size:22px;font-weight:600;min-width:118px;letter-spacing:.01em}
 .clock .of{color:var(--ink-3);font-size:15px;margin-left:4px}
 .spacer{flex:1}
-.lm{display:inline-flex;align-items:center;gap:8px}
-.lm-read{font-stretch:78%;font-weight:600;color:var(--ink-2);min-width:7ch}
+.hr{display:inline-flex;align-items:center;gap:8px}
+.hr .lbl{color:var(--ink-2)}
+.hr .seg button{padding:5px 10px}
+.lm-read{font-stretch:78%;font-weight:600;color:var(--ink-2);min-width:12ch;white-space:nowrap}
+.lm-read b{font-weight:650;color:var(--ink)}
+.lm-read.guard b{color:var(--caution)}
 .versions{display:inline-flex;align-items:center;gap:6px}
 .versions .lbl{color:var(--ink-2)}
 .hearing{color:var(--ink-2);min-height:20px}
 .hearing b{color:var(--ink);font-weight:600}
+.hearing .warn{color:var(--caution)}
 .lanes{position:relative;border:1px solid var(--rule);border-radius:var(--r-l);background:var(--strip);overflow:hidden}
 .lane{display:grid;grid-template-columns:var(--headw) minmax(0,1fr);grid-template-rows:68px;height:68px;overflow:hidden}
 .lane + .lane{border-top:1px solid var(--rule-2)}
@@ -191,6 +196,13 @@ p{margin:0}
 .read{font-stretch:78%;font-weight:600;font-size:13px;text-align:right;color:var(--ink);user-select:none;cursor:default}
 .read.zero{color:var(--ink-3)}
 .read.hot{color:var(--caution)}
+/* the dB number is also the before/after switch for its layer */
+button.read{border:0;background:none;padding:0 3px;border-radius:4px;line-height:22px;width:100%}
+button.read.can{cursor:pointer;text-decoration:underline dotted var(--ink-3);text-underline-offset:3px}
+button.read.can:hover:not(:disabled){background:var(--strip-2)}
+button.read:disabled{opacity:.45}
+button.read.cmp{color:var(--teal);text-decoration:line-through 1.5px;background:var(--teal-wash)}
+.lane.cmp .fader{opacity:.5}
 .lane canvas{width:100%;height:100%;display:block;cursor:pointer;background:var(--well)}
 .lane.off .scribble{color:var(--ink-3)}
 .playhead{position:absolute;top:0;bottom:0;width:2px;margin-left:-1px;background:var(--head);pointer-events:none;opacity:.85;z-index:2}
@@ -274,7 +286,7 @@ p{margin:0}
 <div class="app">
   <header class="topbar">
     <img class="logo" src="icon-192.png" alt="">
-    <div class="brand"><b>Echo Stems</b><span>1.2</span></div>
+    <div class="brand"><b>Echo Stems</b><span>1.3</span></div>
     <button class="btn small" id="libToggle" aria-expanded="false" aria-controls="side">Library</button>
     <div class="now-title" id="nowTitle"></div>
     <span id="offlineBadge" class="badge" hidden>Works offline</span>
@@ -376,7 +388,13 @@ p{margin:0}
           <label class="check"><input type="checkbox" id="repeat" checked> Repeat</label>
           <div class="versions" id="versions" role="group" aria-label="Versions of this part" hidden></div>
           <div class="spacer"></div>
-          <label class="check lm" title="Keeps the overall loudness equal to the original's (measured to ITU-R BS.1770), so a change you make shifts the balance, not the volume. Peaks never go above the original's own."><input type="checkbox" id="levelMatch"> Level match <span class="lm-read tab" id="lmRead"></span></label>
+          <div class="hr" role="group" aria-label="Headroom for boosts" title="Everything you hear, your mix and the Original alike, plays this far below the song's own level. That leaves room for a layer you raise to really get louder while every other layer stays exactly where it was. 6 dB covers boosts up to +6 dB; 12 dB covers the whole fader. Saved files are at the song's own level.">
+            <span class="lbl">Headroom</span>
+            <div class="seg" id="hrSeg">
+              <button data-hr="0" aria-pressed="false" title="Play at the song's own level. Loud songs have no room above it, so a boost is mostly cancelled by lowering everything.">None</button><button data-hr="6" aria-pressed="true" title="Room for boosts up to +6 dB, the clean part of the fader. Recommended.">6 dB</button><button data-hr="12" aria-pressed="false" title="Room for the whole fader, up to +12 dB. Turn your speakers up to match.">12 dB</button>
+            </div>
+            <span class="lm-read tab" id="lmReadBox">Master <b id="lmRead"></b></span>
+          </div>
         </div>
         <p class="hearing" id="hearing" aria-live="polite"></p>
         <div class="lanes" id="lanes"><div class="playhead" id="playhead"></div></div>
@@ -391,8 +409,8 @@ p{margin:0}
               <button data-fmt="24" aria-pressed="true" title="24-bit WAV with dither: for listening and most apps">24-bit</button>
               <button data-fmt="f32" aria-pressed="false" title="32-bit float WAV: for recording software (DAWs); nothing is rounded">32-bit float</button>
             </div>
-            <button class="btn" id="saveHearing">Save what you’re hearing</button>
-            <button class="btn" id="saveBeat">Save the beat</button>
+            <button class="btn" id="saveHearing" title="Your mix as a file, at the song’s own level (the headroom is only for listening). Peaks never go above the original’s.">Save what you’re hearing</button>
+            <button class="btn" id="saveBeat" title="Everything but the vocals, at the song’s own level">Save the beat</button>
             <button class="btn" id="saveAll">Save every layer</button>
           </div>
           <div class="deck-group">
@@ -463,7 +481,7 @@ p{margin:0}
   </section>
   <section class="set">
     <h3>About</h3>
-    <p>Echo Stems 1.2. Separation engine: BS-RoFormer SW (six layers), exported for browsers by elicwhite (MIT). Runtime: ONNX Runtime Web by Microsoft (MIT). Lossless library: libFLAC by Xiph.Org (BSD) via libflac.js (MIT). Typeface: Archivo by Omnibus-Type (SIL Open Font License).</p>
+    <p>Echo Stems 1.3. Separation engine: BS-RoFormer SW (six layers), exported for browsers by elicwhite (MIT). Runtime: ONNX Runtime Web by Microsoft (MIT). Lossless library: libFLAC by Xiph.Org (BSD) via libflac.js (MIT). Typeface: Archivo by Omnibus-Type (SIL Open Font License).</p>
   </section>
 </aside>
 
@@ -477,7 +495,7 @@ p{margin:0}
 'use strict';
 /* ================= helpers ================= */
 const $ = (id) => document.getElementById(id);
-const SR = 44100, CHUNK = 176400, APP_VERSION = '1.2';
+const SR = 44100, CHUNK = 176400, APP_VERSION = '1.3';
 const MODEL_MB = { f16: 336, f32: 669 };
 const MAX_WHOLE = 8 * 60;                        // longest song separated in one go (memory)
 // model order: bass, drums, other, vocals, guitar, piano. Display order runs from top to bottom.
@@ -546,6 +564,8 @@ const S = {
   quality: 'high',
   fmt: '24',
   shade: true,
+  headroom: 6,               // dB that everything you hear plays below the song's own level: 0, 6 or 12
+  lastLayer: -1,             // the layer you touched last (key A compares it with 0 dB)
   lib: [],                   // library records (without the sound)
   libReady: false,
   saving: null,              // { id, done, total } while a song is being stored
@@ -1027,7 +1047,7 @@ async function openFromLibrary(id) {
     const ver = makeVersion(song, layers, { gram: rec.gram, levels: rec.levels, disagreement: rec.dis, leftoverDb: rec.leftoverDb, peaks }, rec.timing, { setting: rec.setting, device: rec.device, created: rec.created });
     ver.lib = id;
     song.libId = id;
-    if (rec.mix) song.mix = Object.assign(newMix(), rec.mix);
+    if (rec.mix) { song.mix = Object.assign(newMix(), rec.mix); delete song.mix.levelMatch; }     // 1.2 kept a level-match switch here
     song.mode = 'mine';
     song.versions.push(ver); song.active = 0;
     await mountSong(song);
@@ -1169,6 +1189,25 @@ function drawEnvelope(ctx, pk, w, h, color, alpha, gain) {
     ctx.fillRect(x, top, 1, Math.max(1, bot - top));
   }
   ctx.globalAlpha = 1;
+}
+// The outline of a layer at 0 dB, drawn over what you hear, so a boost or a cut shows as the gap between the two.
+function drawOutline(ctx, pk, w, h, color, gain) {
+  const mid = h / 2, amp = h * 0.46 * gain, d = window.devicePixelRatio || 1, r = Math.max(1, Math.round(2 * d));
+  ctx.save();
+  ctx.globalAlpha = 0.7; ctx.strokeStyle = color; ctx.lineWidth = Math.max(1, Math.round(d)); ctx.lineJoin = 'round';
+  for (const top of [true, false]) {
+    const a = top ? pk.mx : pk.mn;
+    ctx.beginPath();
+    for (let x = 0; x < w; x++) {
+      let v = a[x];                                    // the envelope's silhouette, smoothed over a few pixels
+      for (let k = Math.max(0, x - r), e = Math.min(w - 1, x + r); k <= e; k++) v = top ? (a[k] > v ? a[k] : v) : (a[k] < v ? a[k] : v);
+      let y = mid - v * amp;
+      if (y < 0.5) y = 0.5; else if (y > h - 0.5) y = h - 0.5;
+      if (x === 0) ctx.moveTo(0, y); else ctx.lineTo(x + 0.5, y);
+    }
+    ctx.stroke();
+  }
+  ctx.restore();
 }
 function drawOverview() {
   const s = S.draft, cv = $('overviewCanvas'); if (!s || S.view !== 'prepare') return;
@@ -1338,12 +1377,13 @@ async function onResult(m) {
 /* ================= songs and versions ================= */
 let seq = 0;
 function newMix() {
-  return { gain: [0, 0, 0, 0, 0, 0], mute: [false, false, false, false, false, false], solo: [false, false, false, false, false, false], pan: [0, 0, 0, 0, 0, 0], bedDb: -20, levelMatch: pref('es-levelmatch') !== '0', cleanup: false };
+  return { gain: [0, 0, 0, 0, 0, 0], mute: [false, false, false, false, false, false], solo: [false, false, false, false, false, false], pan: [0, 0, 0, 0, 0, 0], bedDb: -20, cleanup: false };
 }
 function newSong({ name, file, key, range, n, oL, oR, bmOrig }) {
   const bm = bmOrig || ESAnalysis.blockMaxima(oL, oR);
   let pk = 0; for (let b = 0; b < bm.nb; b++) { if (bm.L[b] > pk) pk = bm.L[b]; if (bm.R[b] > pk) pk = bm.R[b]; }
-  return { sid: 'song' + (++seq), name, file, key, range, n, dur: n / SR, oL, oR, bmOrig: bm, origPeak: pk, versions: [], active: 0, mix: newMix(), mode: 'mine', libId: null, peaks: null };
+  // cmp: layers you're hearing at 0 dB for a moment to compare (their fader keeps your setting); never saved
+  return { sid: 'song' + (++seq), name, file, key, range, n, dur: n / SR, oL, oR, bmOrig: bm, origPeak: pk, versions: [], active: 0, mix: newMix(), cmp: [false, false, false, false, false, false], mode: 'mine', libId: null, peaks: null };
 }
 function makeVersion(song, layers, an, timing, extra) {
   const A = ESAnalysis;
@@ -1358,9 +1398,11 @@ function makeVersion(song, layers, an, timing, extra) {
   v.Lorig = A.loudnessFromGram(v.bg, flat.cL, flat.cR);
   const T = an.peaks || A.peakTables([song.oL, song.oR], layers);
   v.bmLayers = T.bmLayers; v.resMax = T.resMax;
+  // each layer's loudest sample, left and right: the quick peak bound needs them
+  v.layerMax = v.bmLayers.map((t) => { let a = 0, b = 0; for (let k = 0; k < t.nb; k++) { if (t.L[k] > a) a = t.L[k]; if (t.R[k] > b) b = t.R[k]; } return [a, b]; });
   return v;
 }
-function newMixFlat() { const m = newMix(); m.levelMatch = false; return m; }
+function newMixFlat() { return newMix(); }
 const activeVer = () => (S.song ? S.song.versions[S.song.active] : null);
 
 // Hands a song to the mixing engine and shows the mixer.
@@ -1423,22 +1465,95 @@ function sliderDb(v) {
   return db;
 }
 const FLAT = () => ({ gain: [0, 0, 0, 0, 0, 0], mute: [false, false, false, false, false, false], solo: [false, false, false, false, false, false], pan: [0, 0, 0, 0, 0, 0] });
-// What the engine plays: your mix, or the original exactly when comparing.
-function effMix(s) { return s.mode === 'original' ? Object.assign({}, s.mix, FLAT()) : s.mix; }
+// What the engine plays: your mix (any layer you're comparing back at 0 dB), or the original when you press Original.
+function effMix(s) {
+  if (s.mode === 'original') return Object.assign({}, s.mix, FLAT());
+  if (!s.cmp.some(Boolean)) return s.mix;
+  const m = structuredClone(s.mix);
+  for (let i = 0; i < 6; i++) if (s.cmp[i]) m.gain[i] = 0;
+  return m;
+}
+// A layer can be compared with 0 dB when it's boosted or cut (not muted).
+function canCompare(m, i) { return !m.mute[i] && m.gain[i] !== 0; }
 let undoMix = null;
+// opts.layer: the layer whose control you touched (key A then compares it); opts.fader: you moved its fader.
 function setMix(mutator, opts) {
   const s = S.song; if (!s) return;
   if (s.mode === 'original' && !(opts && opts.keepMode)) { s.mode = 'mine'; }
   if (opts && opts.undoable) undoMix = structuredClone(s.mix);
   mutator(s.mix);
+  if (opts && opts.layer !== undefined) { S.lastLayer = opts.layer; if (opts.fader) s.cmp[opts.layer] = false; }
+  for (let i = 0; i < 6; i++) if (s.cmp[i] && !canCompare(s.mix, i)) s.cmp[i] = false;
   applyMix();
   renderLanesState();
   renderTransport();
   rememberMix();
 }
+// Before and after for one layer: hear it at 0 dB for a moment while its fader keeps your setting; again to go back.
+function toggleCompare(i) {
+  const s = S.song; if (!s || i < 0 || i > 5) return;
+  if (s.mode === 'original') { toast('You’re hearing the original. Click Original (or press O) to go back to your mix, then compare.'); return; }
+  S.lastLayer = i;
+  if (!s.cmp[i] && !canCompare(s.mix, i)) {
+    toast(NAMES[i] + (s.mix.mute[i] ? ': muted.' : ': 0 dB, as recorded. Move its fader, then click its number (or press A) to hear before and after.'));
+    return;
+  }
+  s.cmp[i] = !s.cmp[i];
+  applyMix(); renderLanesState(); renderTransport();
+}
 
-// Turns the mix into the engine's matrices, matches loudness, guards the peaks, and tells the mixing engine.
-let peakToken = 0, lastCap = 1, peakTimer = 0;
+/* The level everything plays at. A loud song's peaks already sit at the top of the digital scale, so with nothing in
+   reserve a boost can only be "heard" by turning everything else down, which cancels most of it. Instead the mixer
+   plays the song a fixed amount below its own level (the headroom, an exact power of two, so the original stays bit
+   for bit, only quieter), and your faders act on top of that at face value: +6 dB on a layer is +6 dB in your ears,
+   and every other layer stays exactly where it was. The master moves only when a boost would push the peaks past the
+   original's own; then the whole mix is lowered just enough, and the readout turns mustard. */
+const HEADROOM_GAIN = { 0: 1, 6: 0.5, 12: 0.25 };
+const headGain = () => HEADROOM_GAIN[S.headroom] || 0.5;
+const IDENT = (() => { const P = new Float64Array(24); for (let i = 0; i < 6; i++) { P[4 * i] = 1; P[4 * i + 3] = 1; } return P; })();
+
+/* The peak guard. The loudest sample of a mix is found exactly in the background (analysis.js). Until then a quick
+   bound stands in: from the last mix whose peak is known exactly (or the original itself), a layer whose matrix changes
+   by dP can move any sample by at most |dP| times that layer's own loudest sample. The bound is never too low, so the
+   peaks never pass the original's, even in the middle of a drag; when it already shows the headroom is enough, no
+   search is needed at all. */
+let peakSeq = 0, peakBusy = false, peakNext = null, peakBase = null;
+function quickPeak(s, v, Pm) {
+  const b = peakBase && peakBase.sid === s.sid && peakBase.vid === v.vid ? peakBase : { P: IDENT, peak: s.origPeak };
+  let dL = 0, dR = 0;
+  for (let i = 0; i < 6; i++) {
+    const o = 4 * i, mx = v.layerMax[i];
+    dL += Math.abs(Pm[o] - b.P[o]) * mx[0] + Math.abs(Pm[o + 1] - b.P[o + 1]) * mx[1];
+    dR += Math.abs(Pm[o + 2] - b.P[o + 2]) * mx[0] + Math.abs(Pm[o + 3] - b.P[o + 3]) * mx[1];
+  }
+  return b.peak + Math.max(dL, dR);
+}
+function guardPeaks(s, v, Pm, H) {
+  peakNext = { s, v, Pm: Float64Array.from(Pm), H, seq: peakSeq };
+  if (!peakBusy) runPeaks();
+}
+async function runPeaks() {
+  peakBusy = true;
+  try {
+    while (peakNext) {
+      const job = peakNext; peakNext = null;
+      const { s, v } = job;
+      const src = { orig: [s.oL, s.oR], layers: v.layers, bmOrig: s.bmOrig, bmLayers: v.bmLayers, resMax: v.resMax };
+      const r = await ESAnalysis.exactPeakAsync(src, ESMix.changeMatrices(job.Pm), () => S.song !== s, 8);
+      if (!r || S.song !== s || activeVer() !== v) continue;
+      peakBase = { sid: s.sid, vid: v.vid, P: job.Pm, peak: r.peak };       // a better starting point for the quick bound
+      if (job.seq !== peakSeq) continue;                                      // the mix has moved on; the next job covers it
+      const cap = r.peak > 0 ? s.origPeak / r.peak : Infinity;
+      const master = Math.min(job.H, cap);
+      s.lm = Object.assign({}, s.lm, { cap, peak: r.peak, master, exact: true });
+      node.port.postMessage({ type: 'coefs', master, masterRamp: Math.round(0.06 * SR) });
+      renderLevel(); renderHearing(); scheduleDraw();
+    }
+  } finally { peakBusy = false; }
+}
+
+// Turns the mix into the engine's matrices, sets the master from the headroom and the peak guard, and tells the
+// mixing engine.
 function applyMix(immediate) {
   const s = S.song, v = activeVer(); if (!s || !v || !node) return;
   const m = effMix(s);
@@ -1446,49 +1561,43 @@ function applyMix(immediate) {
   const anySolo = m.solo.some(Boolean);
   const expOn = m.cleanup && anySolo ? m.solo.slice() : [false, false, false, false, false, false];
   node.port.postMessage({ type: 'expander', on: expOn, levels: v.levels });
-  const unity = ESMix.allIdentity(Pm);
-  const ramp = immediate ? 0 : undefined;
-  if (unity) {                                              // the original, bit for bit
-    ++peakToken; clearTimeout(peakTimer);
-    s.lm = { gain: 1, cap: 1, peak: s.origPeak, lufs: v.Lorig, mixLufs: v.Lorig };
-    node.port.postMessage({ type: 'coefs', P: Pm, master: 1, ramp });
+  const H = headGain(), ramp = immediate ? 0 : undefined;
+  const was = s.lm ? s.lm.master : H;
+  ++peakSeq;
+  if (ESMix.allIdentity(Pm) || !(s.origPeak > 0)) {         // the original, bit for bit, the headroom lower
+    peakNext = null;
+    s.lm = { head: H, cap: Infinity, peak: s.origPeak, lufs: v.Lorig, mixLufs: v.Lorig, master: H, exact: true };
+    node.port.postMessage({ type: 'coefs', P: Pm, master: H, ramp, masterRamp: immediate ? 0 : H < was ? FAST_DOWN : undefined });
     renderLevel();
     return;
   }
-  let lg = 1, mixLufs = v.Lorig;
-  const lv = ESMix.loudnessVectors(Pm);
-  mixLufs = ESAnalysis.loudnessFromGram(v.bg, lv.cL, lv.cR);
-  if (m.levelMatch && Number.isFinite(mixLufs) && Number.isFinite(v.Lorig)) lg = Math.min(Math.pow(10, 12 / 20), Math.pow(10, (v.Lorig - mixLufs) / 20));
-  // until the exact peak search finishes, keep the last cap (usually close) so a boost doesn't overshoot
-  node.port.postMessage({ type: 'coefs', P: Pm, master: Math.min(lg, lastCap), ramp });
-  s.lm = { gain: lg, cap: null, lufs: v.Lorig, mixLufs };
+  const lv = ESMix.loudnessVectors(Pm), mixLufs = ESAnalysis.loudnessFromGram(v.bg, lv.cL, lv.cR);
+  const bound = quickPeak(s, v, Pm), safe = s.origPeak / bound;
+  const master = Math.min(H, safe);
+  // going down, the master moves faster than the layers glide, so no peak slips past the original's on the way
+  node.port.postMessage({ type: 'coefs', P: Pm, master, ramp, masterRamp: immediate ? 0 : master < was ? FAST_DOWN : undefined });
+  s.lm = { head: H, cap: null, peak: null, lufs: v.Lorig, mixLufs, master, exact: safe >= H };
   renderLevel();
-  const token = ++peakToken;
-  clearTimeout(peakTimer);
-  peakTimer = setTimeout(() => {
-    if (token !== peakToken) return;
-    const src = { orig: [s.oL, s.oR], layers: v.layers, bmOrig: s.bmOrig, bmLayers: v.bmLayers, resMax: v.resMax };
-    ESAnalysis.exactPeakAsync(src, ESMix.changeMatrices(Pm), () => token !== peakToken, 8).then((r) => {
-      if (!r || token !== peakToken) return;
-      const cap = r.peak > 0 ? s.origPeak / r.peak : Infinity;
-      lastCap = Math.min(1e3, cap);
-      const master = Math.min(lg, cap);
-      s.lm = { gain: lg, cap, peak: r.peak, lufs: v.Lorig, mixLufs, master };
-      node.port.postMessage({ type: 'coefs', master, masterRamp: Math.round(0.06 * SR) });
-      renderLevel();
-    });
-  }, immediate ? 0 : 40);
+  if (safe >= H) peakNext = null;                           // the headroom is enough: the master is exactly the headroom
+  else guardPeaks(s, v, Pm, H);
 }
+const FAST_DOWN = Math.round(0.005 * SR);
+const GUARD_SHOWN = 0.2;                                    // dB: smaller trims by the peak guard are inaudible, so not flagged
 function renderLevel() {
+  for (const b of $('hrSeg').querySelectorAll('button')) b.setAttribute('aria-pressed', String(Number(b.dataset.hr) === S.headroom));
   const s = S.song; if (!s || !s.lm) return;
-  const m = effMix(s), r = $('lmRead');
-  const master = s.lm.master !== undefined ? s.lm.master : Math.min(s.lm.gain, s.lm.cap || Infinity);
-  const db = 20 * Math.log10(master || 1e-9);
-  const capped = s.lm.cap !== null && s.lm.cap !== undefined && s.lm.cap < s.lm.gain - 1e-9;
-  r.textContent = Math.abs(db) < 0.05 ? '0.0 dB' : fmtDb(db);
-  r.title = (capped ? 'Lowered to keep the peaks no louder than the original’s. ' : '') + (Number.isFinite(s.lm.mixLufs) ? 'Your mix measures ' + num(s.lm.mixLufs, 1) + ' LUFS before matching; the original ' + num(s.lm.lufs, 1) + ' LUFS.' : '');
-  $('levelMatch').checked = !!m.levelMatch;
+  const master = s.lm.master, db = 20 * Math.log10(master || 1e-9), over = 20 * Math.log10(s.lm.head / master);
+  const guard = over >= GUARD_SHOWN;
+  $('lmRead').textContent = Math.abs(db) < 0.05 ? '0.0 dB' : fmtDb(db);
+  $('lmReadBox').classList.toggle('guard', guard);
+  $('lmReadBox').title = guard
+    ? 'Everything is ' + num(over, 1) + ' dB lower than the headroom alone would put it, so the peaks stay no louder than the original’s. ' + (S.headroom < 12 ? 'More headroom gives your boosts more room.' : 'Lower the biggest boost a little to give it back.')
+    : S.headroom ? 'Everything you hear plays ' + S.headroom + ' dB below the song’s own level, so a boost has room: up to about +' + S.headroom + ' dB is heard in full while the other layers stay where they were.' : 'Everything plays at the song’s own level, so a boost on a loud song mostly turns everything else down instead.';
 }
+for (const b of $('hrSeg').querySelectorAll('button')) b.onclick = () => {
+  S.headroom = Number(b.dataset.hr); pref('es-headroom', String(S.headroom));
+  applyMix(); renderLevel(); renderHearing(); scheduleDraw();
+};
 
 /* ================= lanes ================= */
 function buildLanes() {
@@ -1510,7 +1619,7 @@ function buildLanes() {
           '<button class="sm s" aria-pressed="false">S</button><button class="sm m" aria-pressed="false">M</button></div>' +
         '<div class="lane-ctl">' +
           '<input type="range" class="fader" min="0" max="1000" step="1">' +
-          '<output class="read tab db"></output>' +
+          '<button type="button" class="read tab db"></button>' +
         '</div>' +
       '</div><canvas></canvas>';
     lane.querySelector('.scribble').textContent = nm;
@@ -1522,18 +1631,21 @@ function buildLanes() {
     fader.setAttribute('aria-label', nm + ' volume');
     pan.setAttribute('aria-label', nm + ' left-right position');
     fader.title = 'Volume. Above +6 dB (the shaded end) the engine’s flaws start to show. Double-click for 0 dB.';
+    const dbBtn = lane.querySelector('.db');
+    dbBtn.onclick = () => toggleCompare(i);
     pan.title = 'Left-right position. Double-click to centre.';
     lane.querySelector('canvas').setAttribute('aria-label', nm + ' waveform; click to jump');
-    sBtn.onclick = () => setMix((m) => { m.solo[i] = !m.solo[i]; if (m.solo[i]) m.mute[i] = false; });
-    mBtn.onclick = () => setMix((m) => { m.mute[i] = !m.mute[i]; if (m.mute[i]) m.solo[i] = false; });
-    fader.oninput = () => setMix((m) => { m.gain[i] = sliderDb(Number(fader.value)); if (m.gain[i] !== -Infinity) m.mute[i] = false; });
-    fader.ondblclick = () => setMix((m) => { m.gain[i] = 0; });
+    const touch = { layer: i }, moved = { layer: i, fader: true };
+    sBtn.onclick = () => setMix((m) => { m.solo[i] = !m.solo[i]; if (m.solo[i]) m.mute[i] = false; }, touch);
+    mBtn.onclick = () => setMix((m) => { m.mute[i] = !m.mute[i]; if (m.mute[i]) m.solo[i] = false; }, touch);
+    fader.oninput = () => setMix((m) => { m.gain[i] = sliderDb(Number(fader.value)); if (m.gain[i] !== -Infinity) m.mute[i] = false; }, moved);
+    fader.ondblclick = () => setMix((m) => { m.gain[i] = 0; }, moved);
     fader.onkeydown = (e) => {
       const step = e.shiftKey ? 0.1 : (e.key === 'PageUp' || e.key === 'PageDown' ? 3 : 0.5);
       let d = 0;
       if (e.key === 'ArrowUp' || e.key === 'ArrowRight' || e.key === 'PageUp') d = step;
       else if (e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'PageDown') d = -step;
-      else if (e.key === '0') { e.preventDefault(); setMix((m) => { m.gain[i] = 0; }); return; }
+      else if (e.key === '0') { e.preventDefault(); setMix((m) => { m.gain[i] = 0; }, moved); return; }
       else return;
       e.preventDefault(); e.stopPropagation();
       setMix((m) => {
@@ -1541,21 +1653,21 @@ function buildLanes() {
         let nv = Math.round((cur + d) * 10) / 10;
         if (nv > 12) nv = 12;
         m.gain[i] = nv < -60 ? -Infinity : nv;
-      });
+      }, moved);
     };
     // dragging has a small detent at the centre; the keyboard moves in steps of 5% (Shift: 1%)
     pan.onpointerdown = () => { pan.dataset.drag = '1'; };
     pan.onpointerup = pan.onpointercancel = () => { delete pan.dataset.drag; };
-    pan.oninput = () => setMix((m) => { let v = Number(pan.value); if (pan.dataset.drag && Math.abs(v) <= 3) v = 0; m.pan[i] = v / 100; });
-    pan.ondblclick = () => setMix((m) => { m.pan[i] = 0; });
+    pan.oninput = () => setMix((m) => { let v = Number(pan.value); if (pan.dataset.drag && Math.abs(v) <= 3) v = 0; m.pan[i] = v / 100; }, touch);
+    pan.ondblclick = () => setMix((m) => { m.pan[i] = 0; }, touch);
     pan.onkeydown = (e) => {
       let d = 0;
       if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') d = -1;
       else if (e.key === 'ArrowRight' || e.key === 'ArrowUp') d = 1;
-      else if (e.key === 'Home' || e.key === '0') { e.preventDefault(); e.stopPropagation(); setMix((m) => { m.pan[i] = 0; }); return; }
+      else if (e.key === 'Home' || e.key === '0') { e.preventDefault(); e.stopPropagation(); setMix((m) => { m.pan[i] = 0; }, touch); return; }
       else return;
       e.preventDefault(); e.stopPropagation();
-      setMix((m) => { m.pan[i] = Math.max(-100, Math.min(100, Math.round(m.pan[i] * 100) + d * (e.shiftKey ? 1 : 5))) / 100; });
+      setMix((m) => { m.pan[i] = Math.max(-100, Math.min(100, Math.round(m.pan[i] * 100) + d * (e.shiftKey ? 1 : 5))) / 100; }, touch);
     };
     box.appendChild(lane);
   }
@@ -1575,24 +1687,33 @@ function effGain(m, i) {
 function renderLanesState() {
   const s = S.song; if (!s) return;
   const m = effMix(s), comparing = s.mode === 'original';
+  const set = comparing ? m : s.mix;                       // a fader you're comparing keeps showing your setting
   for (const lane of $('lanes').querySelectorAll('.lane')) {
     const i = Number(lane.dataset.i); if (i < 0) continue;
-    const g = effGain(m, i);
+    const g = effGain(m, i), lc = NAMES[i].toLowerCase();
     lane.classList.toggle('off', g === 0 || (m.solo.some(Boolean) && !m.solo[i]));
     const sBtn = lane.querySelector('.s'), mBtn = lane.querySelector('.m'), fader = lane.querySelector('.fader'), pan = lane.querySelector('.pan');
     sBtn.setAttribute('aria-pressed', String(m.solo[i])); mBtn.setAttribute('aria-pressed', String(m.mute[i]));
-    const pos = Math.round(dbToPos(m.gain[i]) * 1000);
+    const pos = Math.round(dbToPos(set.gain[i]) * 1000);
     if (document.activeElement !== fader || Number(fader.value) !== pos) fader.value = String(pos);
-    fader.setAttribute('aria-valuetext', fmtDb(m.gain[i]));
+    fader.setAttribute('aria-valuetext', fmtDb(set.gain[i]));
     const pv = Math.round(m.pan[i] * 100);
     if (Number(pan.value) !== pv) pan.value = String(pv);
     pan.setAttribute('aria-valuetext', m.pan[i] === 0 ? 'centre' : Math.abs(pv) + '% ' + (pv < 0 ? 'left' : 'right'));
-    const db = lane.querySelector('.db');
-    db.textContent = fmtDb(m.gain[i], false);
-    db.classList.toggle('zero', m.gain[i] === 0);
-    db.classList.toggle('hot', m.gain[i] > 6);
+    const db = lane.querySelector('.db'), cmp = !comparing && s.cmp[i], can = !comparing && canCompare(s.mix, i);
+    db.textContent = fmtDb(set.gain[i], false);
+    db.classList.toggle('zero', set.gain[i] === 0);
+    db.classList.toggle('hot', set.gain[i] > 6 && !cmp);
+    db.classList.toggle('cmp', cmp);
+    db.classList.toggle('can', can || cmp);
+    db.setAttribute('aria-pressed', String(cmp));
+    db.setAttribute('aria-label', NAMES[i] + ' ' + fmtDb(set.gain[i]) + (cmp ? ', heard at 0 dB to compare' : '') + '. Compare with 0 dB');
+    db.title = cmp ? 'Now: the ' + lc + ' at 0 dB, as recorded. Click (or press A) to hear your ' + fmtDb(set.gain[i]) + ' again.'
+      : can ? 'Click (or press A) to hear the ' + lc + ' at 0 dB for a moment: before and after.'
+      : comparing ? '' : set.gain[i] === 0 ? '0 dB: the ' + lc + ' as recorded.' : 'Muted.';
+    lane.classList.toggle('cmp', cmp);
     lane.querySelector('.pv').textContent = fmtPan(m.pan[i]);
-    for (const el of [sBtn, mBtn, fader, pan]) el.disabled = comparing;
+    for (const el of [sBtn, mBtn, fader, pan, db]) el.disabled = comparing;
   }
   scheduleDraw();
   renderHearing();
@@ -1606,13 +1727,16 @@ function drawLanes() {
   const w0 = sizeCanvas(lanes[0].querySelector('canvas')).w;
   if (!s.peaks || s.peaks.mn.length !== w0) { s.peaks = peaksOf(s.oL, s.oR, 0, s.n, w0); s.gain = gainFor(peakOf(s.peaks)); }
   if (!v.peaks || v.peaks.w !== w0) v.peaks = { w: w0, lanes: v.layers.map(([l, r]) => peaksOf(l, r, 0, s.n, w0)) };
-  const m = effMix(s), anySolo = m.solo.some(Boolean), warn = css('--caution');
+  const m = effMix(s), anySolo = m.solo.some(Boolean), warn = css('--caution'), ink = css('--ink');
   const showShade = S.shade && v.dis, shadeMax = matchMedia('(prefers-color-scheme: dark)').matches ? 0.3 : 0.38;
+  // Everything is drawn at the size you hear it: a lane's edge is the original's loudest moment, so the headroom shows
+  // as space above and below, a boost grows into it, and the peak guard (if it acts) shrinks every lane together.
+  const H = s.lm ? s.lm.head : headGain(), master = s.lm ? s.lm.master : H;
   for (const lane of lanes) {
     const i = Number(lane.dataset.i), cv = lane.querySelector('canvas');
     const { w, h } = sizeCanvas(cv), ctx = cv.getContext('2d');
     ctx.clearRect(0, 0, w, h);
-    if (i < 0) { drawEnvelope(ctx, s.peaks, w, h, css('--c-orig'), 0.85, s.gain); continue; }
+    if (i < 0) { drawEnvelope(ctx, s.peaks, w, h, css('--c-orig'), 0.85, s.gain * H); continue; }
     if (showShade) {
       const { nb, data, block } = v.dis, row = i * nb;
       ctx.fillStyle = warn;
@@ -1628,8 +1752,12 @@ function drawLanes() {
     }
     const g = effGain(m, i);
     const quiet = g === 0 || (anySolo && !m.solo[i]);
-    const shown = quiet ? 1 : Math.min(4, g);            // what you hear grows with its fader; quiet layers stay faint at full size
-    if (v.peaks.lanes[i].mn.length === w) drawEnvelope(ctx, v.peaks.lanes[i], w, h, css(COLORS[i]), quiet ? 0.28 : 1, s.gain * shown);
+    const shown = quiet ? H : master * g;                 // quiet layers stay faint at the size they'd have at 0 dB
+    const pk = v.peaks.lanes[i];
+    if (pk.mn.length === w) {
+      drawEnvelope(ctx, pk, w, h, css(COLORS[i]), quiet ? 0.28 : 1, s.gain * shown);
+      if (!quiet && Math.abs(shown / H - 1) > 0.012) drawOutline(ctx, pk, w, h, ink, s.gain * H);   // where 0 dB would be
+    }
   }
   placeHead();
 }
@@ -1640,13 +1768,15 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { dr
 function renderHearing() {
   const s = S.song; if (!s) return;
   const h = $('hearing');
-  if (s.mode === 'original') { h.innerHTML = '<b>The original</b>, exactly as recorded. Your mix is kept; click Original again to hear it.'; return; }
+  if (s.mode === 'original') { h.innerHTML = '<b>The original</b>, exactly as recorded' + (S.headroom ? ', ' + S.headroom + ' dB down like your mix' : '') + '. Your mix is kept; click Original again to hear it.'; return; }
   const m = s.mix, anySolo = m.solo.some(Boolean);
-  const gainText = (i) => (m.gain[i] !== 0 ? ' ' + fmtDb(m.gain[i]) : '') + (m.pan[i] ? ' ' + fmtPan(m.pan[i]) : '');
+  const gainText = (i) => (s.cmp[i] ? ' at 0 dB for now (yours: ' + fmtDb(m.gain[i]) + ')' : m.gain[i] !== 0 ? ' ' + fmtDb(m.gain[i]) : '') + (m.pan[i] ? ' ' + fmtPan(m.pan[i]) : '');
   let text;
   if (anySolo) {
     const on = ORDER.filter((i) => m.solo[i]).map((i) => NAMES[i].toLowerCase() + gainText(i));
-    text = '<b>Solo: ' + esc(listJoin(on)) + '</b>, ' + (m.bedDb === -Infinity ? 'nothing else' : 'the rest ' + fmtDb(m.bedDb) + ' below as room tone') + (m.cleanup ? ', cleaned up between phrases' : '');
+    const rest = ORDER.filter((i) => !m.solo[i] && !m.mute[i] && m.gain[i] !== -Infinity);
+    const off = ORDER.filter((i) => !m.solo[i] && (m.mute[i] || m.gain[i] === -Infinity));
+    text = '<b>Solo: ' + esc(listJoin(on)) + '</b>, ' + (m.bedDb === -Infinity || !rest.length ? 'nothing else' : 'the rest ' + fmtDb(m.bedDb) + ' below as room tone' + (off.length ? ' (' + esc(listJoin(off.map((i) => NAMES[i].toLowerCase()))) + ' muted)' : '')) + (m.cleanup ? ', cleaned up between phrases' : '');
   } else {
     const muted = ORDER.filter((i) => m.mute[i] || m.gain[i] === -Infinity);
     const changed = ORDER.filter((i) => !muted.includes(i) && (m.gain[i] !== 0 || m.pan[i] !== 0));
@@ -1659,6 +1789,8 @@ function renderHearing() {
       text = '<b>' + esc(parts.join('; ')) + '</b>';
     }
   }
+  const over = s.lm ? 20 * Math.log10(s.lm.head / s.lm.master) : 0;
+  if (over >= GUARD_SHOWN) text += '. <span class="warn">Everything is ' + num(over, 1) + ' dB lower so the peaks stay at the original’s.</span>';
   h.innerHTML = text;
 }
 function esc(s) { return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
@@ -1709,7 +1841,6 @@ $('flatBtn').onclick = () => {
   toast('Every layer is back to 0 dB and centred.', { label: 'Undo', run: undo });
 };
 function undo() { if (!undoMix || !S.song) return; const u = undoMix; undoMix = null; setMix((m) => { Object.assign(m, u); }); }
-$('levelMatch').onchange = () => { const on = $('levelMatch').checked; pref('es-levelmatch', on ? '1' : '0'); setMix((m) => { m.levelMatch = on; }, { keepMode: true }); };
 $('repeat').onchange = () => { P.repeat = $('repeat').checked; if (node) node.port.postMessage({ type: 'repeat', on: P.repeat }); };
 
 function play() {
@@ -1765,6 +1896,14 @@ document.addEventListener('keydown', (e) => {
   const inRange = tag === 'INPUT' && e.target.type === 'range';
   if (/TEXTAREA|SELECT/.test(tag) || (tag === 'INPUT' && !inRange && e.target.type !== 'checkbox')) return;
   if (e.code === 'Space') { e.preventDefault(); spaceDown = true; if (!e.repeat) (P.playing ? pause() : play()); }
+  else if (e.key === 'a' || e.key === 'A') {
+    e.preventDefault();
+    if (e.repeat) return;
+    const lane = e.target && e.target.closest ? e.target.closest('.lane') : null;
+    const i = lane && Number(lane.dataset.i) >= 0 ? Number(lane.dataset.i) : S.lastLayer;
+    if (i >= 0) toggleCompare(i);
+    else toast('Move a fader first; then A switches that layer between 0 dB and your setting.');
+  }
   else if (inRange) return;
   else if (e.key === 'Home') { e.preventDefault(); seek(0); }
   else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); const d = (e.key === 'ArrowLeft' ? -1 : 1) * (e.shiftKey ? 1 : 5); seek(heardFrame() + d * SR); }
@@ -1860,14 +1999,13 @@ async function saveCurrent(kind) {
     if (kind === 'beat') { m = Object.assign({}, s.mix, FLAT()); m.mute[VOCALS] = true; label = 'beat'; }
     else { m = effMix(s); label = s.mode === 'original' ? 'original' : 'mix'; }
     const Pm = ESMix.playMatrices(m, v.rho);
+    // Files are at the song's own level (the headroom is only for listening): your balance exactly, lowered only if
+    // its peaks would pass the original's.
     let master = 1;
     if (!ESMix.allIdentity(Pm)) {
       toast('Measuring the peaks…');
-      let lg = 1;
-      const lv = ESMix.loudnessVectors(Pm), L = ESAnalysis.loudnessFromGram(v.bg, lv.cL, lv.cR);
-      if (m.levelMatch && Number.isFinite(L)) lg = Math.min(Math.pow(10, 12 / 20), Math.pow(10, (v.Lorig - L) / 20));
       const r = ESAnalysis.exactPeak({ orig: [s.oL, s.oR], layers: v.layers, bmOrig: s.bmOrig, bmLayers: v.bmLayers, resMax: v.resMax }, ESMix.changeMatrices(Pm));
-      master = Math.min(lg, r.peak > 0 ? s.origPeak / r.peak : Infinity);
+      master = Math.min(1, r.peak > 0 ? s.origPeak / r.peak : Infinity);
     }
     toast('Preparing the file…');
     const expOn = m.cleanup && m.solo.some(Boolean) ? m.solo.slice() : null;
@@ -1955,7 +2093,7 @@ function reportText() {
     );
     const ds = disStats(v);
     lines.push(ds ? 'Disagreement (median / 90th percentile; shaded above -22 dB): ' + ds.join('; ') : 'Disagreement: not measured at Standard quality');
-    if (s.lm) lines.push('Current mix: ' + $('hearing').textContent + '; master ' + $('lmRead').textContent + (s.lm.peak ? ', mix peak before the master ' + num(20 * Math.log10(s.lm.peak), 2) + ' dBFS' : ''));
+    if (s.lm) lines.push('Current mix: ' + $('hearing').textContent.replace(/\.$/, '') + '; headroom ' + S.headroom + ' dB; master ' + $('lmRead').textContent + (s.lm.peak ? ', mix peak before the master ' + num(20 * Math.log10(s.lm.peak), 2) + ' dBFS' : '') + (Number.isFinite(s.lm.mixLufs) ? ', ' + num(s.lm.mixLufs + 20 * Math.log10(s.lm.master), 1) + ' LUFS as heard' : ''));
     lines.push('Library: ' + (v.lib ? 'saved' : 'not saved'));
   } else lines.push('No song in the mixer.');
   lines.push('Speed setting: ' + speedLine(S.speed), ...benchReport(),
@@ -2166,6 +2304,8 @@ S.speed = loadSpeed();
 { const q = pref('es-quality'); if (QUALITIES[q]) S.quality = q; }
 { const f = pref('es-fmt'); if (f === '24' || f === 'f32') S.fmt = f; }
 S.shade = pref('es-shade') !== '0';
+{ const h = pref('es-headroom'); if (h === '0' || h === '6' || h === '12') S.headroom = Number(h); }
+renderLevel();
 probeGpu().then((g) => {
   S.gpu = g;
   if (!g.webgpu) S.backend = 'wasm';
