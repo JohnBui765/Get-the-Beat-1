@@ -4,9 +4,13 @@
    - keeps the separation model (the "engine", a 336 MB file) in the browser's storage on this computer,
      downloading it once from Hugging Face or taking it from a file you choose;
    - loads it onto the graphics card (WebGPU) or, if asked, the processor (WebAssembly);
-   - cuts stereo 44.1 kHz audio into 4-second chunks that overlap by 1 second, turns each chunk into a
-     spectrogram, lets the model split it into six layers, turns the layers back into sound and blends the
-     chunks together again.
+   - cuts stereo 44.1 kHz audio into 4-second chunks, turns each chunk into a spectrogram, lets the model split it
+     into six layers, hands whatever the model assigned to no layer to the layer that dominates at that moment and
+     pitch (so the six layers always add up to the song exactly), turns the layers back into sound and blends the
+     chunks together again;
+   - at High and Maximum quality, hears every moment two or four times in overlapping chunks (Maximum also listens to
+     every other chunk with left and right swapped) and averages them, trusting each listen most where the moment sat
+     near the middle of its chunk; where two listens disagree, it notes how much, for the shading in the mixer.
 
    Model: BS-RoFormer SW, six layers (bass, drums, other, vocals, guitar, piano), exported to ONNX by
    elicwhite: https://huggingface.co/elicwhite/bs-roformer-sw-6stem-onnx
@@ -143,7 +147,35 @@ const CORE = (() => {
     }
   }
 
-  function segmentCount(N) { return Math.max(1, Math.ceil((N - OVERLAP) / STEP)); }
+  /* How much of the music each chunk hears.
+     standard: chunks every 3 s (each moment heard about 1.3 times), blended over the shared second, as in 1.0 and 1.1.
+     high:     chunks every 2 s, so every moment is heard twice (the engine's own settings file asks for this).
+     maximum:  chunks every second, every other one with left and right swapped: four listens per moment.
+     High and Maximum weight each listen by a raised-cosine curve that peaks mid-chunk, where the engine hears the
+     most music on both sides; at the very start and end of the song the outer half of the chunk counts fully. */
+  const QUALITIES = {
+    standard: { id: 'standard', step: CHUNK - OVERLAP, hann: false, mirror: false },
+    high: { id: 'high', step: CHUNK / 2, hann: true, mirror: false },
+    maximum: { id: 'maximum', step: CHUNK / 4, hann: true, mirror: true },
+  };
+  const qualityOf = (q) => QUALITIES[q] || QUALITIES.standard;
+  function chunkCount(N, step) { return N <= CHUNK ? 1 : Math.ceil((N - CHUNK) / step) + 1; }
+  function segmentCount(N, quality) { return chunkCount(N, qualityOf(quality).step); }
+
+  const hann = new Float32Array(CHUNK);
+  for (let i = 0; i < CHUNK; i++) { const s = Math.sin((Math.PI * i) / CHUNK); hann[i] = s * s; }
+  // The weight a chunk's own sample i gets, for chunk k of K.
+  function weightAt(q, i, k, K) {
+    if (K === 1) return 1;
+    if (q.hann) {
+      if ((k === 0 && i < CHUNK / 2) || (k === K - 1 && i >= CHUNK / 2)) return 1;
+      return hann[i];
+    }
+    const O = CHUNK - q.step;
+    if (k > 0 && i < O) return i / O;
+    if (k < K - 1 && i >= CHUNK - O) return 1 - (i - (CHUNK - O)) / O;
+    return 1;
+  }
 
   // Copies the chunk starting at `start` into cL / cR, padding with silence past the end. Returns its real length.
   function fillChunk(L, R, start, cL, cR) {
@@ -153,21 +185,43 @@ const CORE = (() => {
     return len;
   }
 
-  // Adds one separated chunk into the full-length layer, fading in and out across the shared second.
-  function addSegment(dstL, dstR, srcL, srcR, start, len, seg, nSeg) {
-    const N = dstL.length, fadeOutFrom = CHUNK - OVERLAP;
-    for (let i = 0; i < len; i++) {
-      const g = start + i;
-      if (g >= N) break;
-      let w = 1;
-      if (seg > 0 && i < OVERLAP) w = i / OVERLAP;
-      if (seg < nSeg - 1 && i >= fadeOutFrom) w = 1 - (i - fadeOutFrom) / OVERLAP;
-      dstL[g] += srcL[i] * w;
-      dstR[g] += srcR[i] * w;
+  /* Hands out what the model left over. In every frequency bin of every frame, the mixture X minus the six layers'
+     sum is shared among the layers in proportion to each layer's energy there:  S_i += |S_i|^2 / sum|S_j|^2 * (X - sum S_j).
+     Afterwards the layers add up to X exactly. Of all the ways to make them add up, this one changes each layer least
+     relative to its own strength, so it cannot move the six layers, taken together, further from the real instruments.
+     Also checks every number the graphics card sent back. Adds the leftover and mixture energy to `stats`. */
+  function project(xRe, xIm, oRe, oIm, stats) {
+    const FT = F * T;
+    let eR = 0, eX = 0;
+    for (let c = 0; c < 2; c++) {
+      for (let j = 0; j < FT; j++) {
+        const xi = c * FT + j, xr = xRe[xi], xm = xIm[xi];
+        let sr = 0, sm = 0, den = 0;
+        for (let s = 0; s < NSTEM; s++) {
+          const o = (s * 2 + c) * FT + j, a = oRe[o], b = oIm[o];
+          sr += a; sm += b; den += a * a + b * b;
+        }
+        if (!Number.isFinite(den) || !Number.isFinite(sr + sm)) throw new Error('The graphics card sent back numbers that aren’t valid, so the separation was stopped.');
+        const rr = xr - sr, rm = xm - sm;
+        eR += rr * rr + rm * rm; eX += xr * xr + xm * xm;
+        if (den > 1e-24) {
+          const inv = 1 / den;
+          for (let s = 0; s < NSTEM; s++) {
+            const o = (s * 2 + c) * FT + j, a = oRe[o], b = oIm[o], w = (a * a + b * b) * inv;
+            oRe[o] = a + w * rr; oIm[o] = b + w * rm;
+          }
+        } else {                                   // no layer claims this bin: share it equally
+          for (let s = 0; s < NSTEM; s++) { const o = (s * 2 + c) * FT + j; oRe[o] += rr / NSTEM; oIm[o] += rm / NSTEM; }
+        }
+      }
     }
+    stats.leftover += eR; stats.mixture += eX;
   }
 
   function energy(a) { let e = 0; for (let i = 0; i < a.length; i += 7) e += a[i] * a[i]; return e; }
+
+  // Disagreement between two listens is summed in quarter-second blocks of the song.
+  const DIS_BLOCK = SR / 4;
 
   // True when the model's output is usable: finite numbers, and not all silence when the input wasn't silent.
   function outputLooksValid(re, im, inputEnergy) {
@@ -184,27 +238,66 @@ const CORE = (() => {
   /* Separates stereo audio into the six layers.
      run(re, im) must return a promise of { re, im } (the model's two outputs as Float32Arrays).
      The next chunk's spectrogram and the previous chunk's layers are worked out while the model runs. */
-  async function separate({ L, R, run, onProgress, isCancelled, check }) {
-    const N = L.length, nSeg = segmentCount(N);
+  async function separate({ L, R, run, onProgress, isCancelled, check, quality }) {
+    const q = qualityOf(quality);
+    const N = L.length, nSeg = chunkCount(N, q.step);
     const outL = STEMS.map(() => new Float32Array(N)), outR = STEMS.map(() => new Float32Array(N));
+    const wsum = new Float32Array(N);
     const cL = new Float32Array(CHUNK), cR = new Float32Array(CHUNK);
-    const sL = new Float32Array(CHUNK), sR = new Float32Array(CHUNK);
-    const sets = [0, 1].map(() => ({ re: new Float32Array(SPEC), im: new Float32Array(SPEC), start: 0, len: 0, e: 0 }));
+    // this chunk's layers and the previous chunk's, kept to compare the two listens where they overlap
+    let cur = { L: STEMS.map(() => new Float32Array(CHUNK)), R: STEMS.map(() => new Float32Array(CHUNK)), start: 0, seg: -1 };
+    let prev = { L: STEMS.map(() => new Float32Array(CHUNK)), R: STEMS.map(() => new Float32Array(CHUNK)), start: 0, seg: -1 };
+    const sets = [0, 1].map(() => ({ re: new Float32Array(SPEC), im: new Float32Array(SPEC), start: 0, len: 0, e: 0, mirror: false }));
+    const nDis = Math.ceil(N / DIS_BLOCK);
+    const dis = q.hann && nSeg > 1 ? { D: new Float64Array(NSTEM * nDis), E: new Float64Array(NSTEM * nDis), X: new Float64Array(nDis) } : null;
+    const stats = { leftover: 0, mixture: 0 };
     const segMs = [];
     let dspMs = 0, pending = null;
 
     const prepare = (seg) => {
       const st = sets[seg & 1];
-      st.start = seg * STEP;
-      st.len = fillChunk(L, R, st.start, cL, cR);
+      st.start = seg * q.step;
+      st.mirror = q.mirror && (seg & 1) === 1;
+      st.len = st.mirror ? fillChunk(R, L, st.start, cL, cR) : fillChunk(L, R, st.start, cL, cR);
       st.e = energy(cL) + energy(cR);
       stft(cL, cR, st.re, st.im);
     };
-    const finish = (p) => {
-      for (let s = 0; s < NSTEM; s++) {
-        istftStem(p.re, p.im, s, sL, sR);
-        addSegment(outL[s], outR[s], sL, sR, p.start, p.len, p.seg, nSeg);
+
+    const compare = () => {                       // the overlap of the previous chunk and this one
+      const a = Math.max(cur.start, 0), b = Math.min(prev.start + CHUNK, N);
+      const D = dis.D, E = dis.E, X = dis.X;
+      for (let n = a; n < b; n++) {
+        const i1 = n - prev.start, i2 = n - cur.start;
+        const w = weightAt(q, i1, prev.seg, nSeg) * weightAt(q, i2, cur.seg, nSeg);
+        if (!(w > 0)) continue;
+        const blk = (n / DIS_BLOCK) | 0, xl = L[n], xr = R[n];
+        X[blk] += w * (xl * xl + xr * xr);
+        for (let s = 0; s < NSTEM; s++) {
+          const pl = prev.L[s][i1], pr = prev.R[s][i1], ql = cur.L[s][i2], qr = cur.R[s][i2];
+          const dl = ql - pl, dr = qr - pr, ml = 0.5 * (ql + pl), mr = 0.5 * (qr + pr);
+          D[s * nDis + blk] += w * (dl * dl + dr * dr);
+          E[s * nDis + blk] += w * (ml * ml + mr * mr);
+        }
       }
+    };
+
+    const finish = (p) => {
+      project(p.set.re, p.set.im, p.re, p.im, stats);
+      for (let s = 0; s < NSTEM; s++) {
+        if (p.mirror) istftStem(p.re, p.im, s, cur.R[s], cur.L[s]);     // swapped back
+        else istftStem(p.re, p.im, s, cur.L[s], cur.R[s]);
+      }
+      cur.start = p.start; cur.seg = p.seg;
+      for (let i = 0; i < p.len; i++) {
+        const g = p.start + i;
+        if (g >= N) break;
+        const w = weightAt(q, i, p.seg, nSeg);
+        if (w === 0) continue;
+        wsum[g] += w;
+        for (let s = 0; s < NSTEM; s++) { outL[s][g] += w * cur.L[s][i]; outR[s][g] += w * cur.R[s][i]; }
+      }
+      if (dis && p.seg > 0) compare();
+      const t = prev; prev = cur; cur = t;
     };
 
     const t0 = now();
@@ -214,31 +307,49 @@ const CORE = (() => {
     for (let seg = 0; seg < nSeg; seg++) {
       if (isCancelled && isCancelled()) throw cancelledError();
       const ts = now();
-      const cur = sets[seg & 1];
-      const runP = run(cur.re, cur.im);
+      const set = sets[seg & 1];
+      const runP = run(set.re, set.im);
       td = now();
       if (pending) { finish(pending); pending = null; }
       if (seg + 1 < nSeg) prepare(seg + 1);
       dspMs += now() - td;
       const out = await runP;
-      if (seg === 0 && !outputLooksValid(out.re, out.im, cur.e)) {
-        throw new Error('The graphics card sent back silence instead of music, so the test was stopped.');
+      if (seg === 0 && !outputLooksValid(out.re, out.im, set.e)) {
+        throw new Error('The graphics card sent back silence instead of music, so the separation was stopped.');
       }
       if (check) check(seg);
-      pending = { re: out.re, im: out.im, start: cur.start, len: cur.len, seg };
+      pending = { re: out.re, im: out.im, set, start: set.start, len: set.len, mirror: set.mirror, seg };
       segMs.push(now() - ts);
       if (onProgress) onProgress({ done: seg + 1, total: nSeg, elapsedMs: now() - t0, segMs: segMs[segMs.length - 1] });
     }
     td = now();
     if (pending) finish(pending);
+    for (let g = 0; g < N; g++) {                 // turn the weighted sums into weighted averages
+      const w = wsum[g];
+      if (w === 1) continue;
+      const inv = w > 0 ? 1 / w : 0;
+      for (let s = 0; s < NSTEM; s++) { outL[s][g] *= inv; outR[s][g] *= inv; }
+    }
+    let disagreement = null;
+    if (dis) {
+      const data = new Float32Array(NSTEM * nDis);
+      for (let s = 0; s < NSTEM; s++) {
+        for (let b = 0; b < nDis; b++) {
+          const d = dis.D[s * nDis + b], e = dis.E[s * nDis + b], x = dis.X[b];
+          data[s * nDis + b] = x > 0 || e > 0 ? 10 * Math.log10((d + 1e-30) / (2 * (e + 0.003 * x) + 1e-30)) : NaN;
+        }
+      }
+      disagreement = { block: DIS_BLOCK, nb: nDis, data };
+    }
     dspMs += now() - td;
-    return { outL, outR, nSeg, segMs, dspMs, totalMs: now() - t0 };
+    const leftoverDb = stats.mixture > 0 ? 10 * Math.log10((stats.leftover + 1e-30) / stats.mixture) : -Infinity;
+    return { outL, outR, nSeg, segMs, dspMs, totalMs: now() - t0, quality: q.id, disagreement, leftoverDb };
   }
 
   function now() { return (typeof performance !== 'undefined' ? performance : Date).now(); }
   function cancelledError() { const e = new Error('Stopped'); e.name = 'Cancelled'; return e; }
 
-  return { SR, CHUNK, OVERLAP, STEP, NFFT, HOP, F, T, SPEC, STEMS, fft, stft, istftStem, segmentCount, fillChunk, addSegment, outputLooksValid, energy, separate };
+  return { SR, CHUNK, OVERLAP, STEP, NFFT, HOP, F, T, SPEC, STEMS, QUALITIES, fft, stft, istftStem, chunkCount, segmentCount, weightAt, fillChunk, project, outputLooksValid, energy, separate, DIS_BLOCK };
 })();
 
 if (typeof module !== 'undefined' && module.exports) {
@@ -248,6 +359,7 @@ if (typeof module !== 'undefined' && module.exports) {
   // Which ONNX Runtime this worker uses is set by the page's first message ({ type: 'init', rt }), not by the worker's
   // address: when the service worker serves this file from its cache, the address loses its ?rt= part.
   // Each speed-check set-up runs in a fresh worker, so only one engine sits on the graphics card at a time.
+  importScripts('analysis.js');                // loudness measurements, shared with the page
   const CDN130 = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/';
   const RUNTIMES = {
     jsep124: { script: 'ort-1.24.3/ort.min.js', wasm: new URL('ort-1.24.3/', self.location).href },   // saved with the app
@@ -499,21 +611,37 @@ if (typeof module !== 'undefined' && module.exports) {
     cancel = false;
     gpuErrors = 0; gpuError = '';
     const { L, R, kind, backend } = msg;
+    const quality = msg.quality || 'standard';
     const cfg = backend === 'webgpu' ? (msg.cfg || {}) : {};
     post({ type: 'stage', stage: 'loading' });
     const g = await getSession(kind, backend, cfg);
-    post({ type: 'stage', stage: 'running', total: CORE.segmentCount(L.length) });
+    post({ type: 'stage', stage: 'running', total: CORE.segmentCount(L.length, quality) });
     const r = await CORE.separate({
-      L, R, run: g.runner.run, check: checkGpu,
+      L, R, run: g.runner.run, check: checkGpu, quality,
       isCancelled: () => cancel,
       onProgress: (p) => post({ type: 'progress', ...p }),
     });
+    // Measurements the mixer needs: the layers' K-weighted cross-products (exact loudness for any fader setting)
+    // and each layer's playing level (for the clean-up in Solo).
+    post({ type: 'stage', stage: 'measuring' });
+    const tm = now();
+    const flat = [];
+    for (let i = 0; i < CORE.STEMS.length; i++) flat.push(r.outL[i], r.outR[i]);
+    const gram = self.ESAnalysis.gramSub(flat, CORE.SR, (f) => post({ type: 'measure-progress', f }));
+    const levels = CORE.STEMS.map((_, i) => self.ESAnalysis.playingLevel(r.outL[i], r.outR[i], CORE.SR));
+    // the peak search's tables (each layer's loudest sample per 1.5 ms), worked out here rather than on the page
+    const layers = CORE.STEMS.map((_, i) => [r.outL[i], r.outR[i]]);
+    const peaks = self.ESAnalysis.peakTables([L, R], layers);
+    const measureMs = now() - tm;
     const stems = CORE.STEMS.map((name, i) => ({ name, L: r.outL[i], R: r.outR[i] }));
-    const transfer = [];
+    const transfer = [gram.sub.buffer, peaks.bmOrig.L.buffer, peaks.bmOrig.R.buffer, peaks.resMax.buffer];
+    for (const t of peaks.bmLayers) transfer.push(t.L.buffer, t.R.buffer);
     for (const st of stems) transfer.push(st.L.buffer, st.R.buffer);
+    if (r.disagreement) transfer.push(r.disagreement.data.buffer);
     post({
       type: 'result', stems,
-      timing: { loadMs: g.loadMs, freshSession: g.fresh, totalMs: r.totalMs, segMs: r.segMs, dspMs: r.dspMs, nSeg: r.nSeg, backend, kind, cfg, runtime: RT, adapter: backend === 'webgpu' ? await adapterInfo() : null },
+      analysis: { gram: { sub: gram.sub, nSub: gram.nSub, nSig: gram.nSig, sb: gram.sb }, levels, disagreement: r.disagreement, leftoverDb: r.leftoverDb, peaks },
+      timing: { loadMs: g.loadMs, freshSession: g.fresh, totalMs: r.totalMs, segMs: r.segMs, dspMs: r.dspMs, measureMs, nSeg: r.nSeg, quality: r.quality, backend, kind, cfg, runtime: RT, adapter: backend === 'webgpu' ? await adapterInfo() : null },
     }, transfer);
   }
 
