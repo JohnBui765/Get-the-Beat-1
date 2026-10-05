@@ -1,12 +1,6 @@
-# Echo Stems 1.3.1
+# Echo Stems 1.3
 
 A desktop music app for playing, mixing and studying music. Echo Stems splits a song into six layers (vocals, guitar, piano, other, bass and drums) on your own computer, then lets you mix them: raise the instrument you're learning, hear two instruments alone together, take the singer out and play along. Nothing is uploaded, and once the engine is saved it works with the internet unplugged.
-
-## What's new in 1.3.1
-
-**Shading that singles something out.** Tuned with the first real report (a piano ballad at High quality). Shading used to start where the engine's two listens disagreed by -22 dB, and on that song it covered 54 to 69% of the guitar, piano and drums, so it marked almost everything and told you nothing. It now starts at -12 dB and reaches full strength at -4 dB: on the same song that is roughly the shakiest quarter of the guitar and a sixth of the piano, and next to nothing of the vocals, bass and drums, where the listens agreed. The stronger the shading, the more a boost there may sound rough.
-
-**The report shows how steady the graphics card was.** The *Chunks* line adds the fastest and slowest chunk and the average of the first and last quarter of the run, so a card that slows down as it heats up shows up in the numbers.
 
 ## What's new in 1.3
 
@@ -44,7 +38,7 @@ A desktop music app for playing, mixing and studying music. Echo Stems splits a 
 
 **Three qualities.** *Standard* hears each moment about 1.3 times (as in 1.1). *High* (recommended) hears each moment twice and averages, trusting each listen most where the moment sat mid-chunk; this is what the engine's own settings ask for. *Maximum* listens four times, half of them with left and right swapped. On your computer a 4-minute song takes about 7, 10½ and 21 minutes. The app shows its estimate for each song before you start.
 
-**Uncertain passages.** At High and Maximum, stretches where the engine's listens disagreed are shaded in mustard on that layer: a boost may sound rough there. The shading was a first calibration, tuned in 1.3.1 (see above); the report still includes the numbers so it can be tuned again.
+**Uncertain passages.** At High and Maximum, stretches where the engine's listens disagreed are shaded in mustard on that layer: a boost may sound rough there. The shading is a first calibration; the report includes the numbers so it can be tuned.
 
 **A library.** Whole songs are kept automatically, losslessly (24-bit FLAC, checked by the encoder as it writes), with your mix. They reopen in seconds without the internet, and every layer is checked against its fingerprint. Parts (30 or 60 s) are kept only if you click **Keep in library**. A 4-minute song takes about 200 MB.
 
@@ -54,15 +48,15 @@ A desktop music app for playing, mixing and studying music. Echo Stems splits a 
 
 **The engine settings** (download, backup, speed check) now live behind the gear button at the top right.
 
-## Updating from version 1.3 (or 1.2)
+## Updating from version 1.2
 
 1. In your `echo-stems` repository, click **Add file > Upload files** and drag in `index.html`, `sw.js` and `README.md` from this folder. (Dragging in everything works too: GitHub leaves the unchanged files as they are.)
    - changed: `index.html`, `sw.js`, `README.md`
    - unchanged: everything else, including `engine.js`, `analysis.js`, `mixer-worklet.js`, `library-worker.js` and the `ort-1.24.3`, `flac` and `fonts` folders
-2. Click **Commit changes**, wait a minute, then open the app once while online. Wait a few seconds, close it and open it again. Version 1.3.1 shows "1.3.1" next to the name.
-3. Coming from 1.2: everything now plays 6 dB quieter at first (the headroom), so turn your speakers up once.
+2. Click **Commit changes**, wait a minute, then open the app once while online. Wait a few seconds, close it and open it again. Version 1.3 shows "1.3" next to the name.
+3. Everything now plays 6 dB quieter at first (the headroom): turn your speakers up once.
 
-Your library, your mixes, the engine you downloaded and your settings all stay as they are; songs already in the library get the new shading straight away. Coming from 1.1? Drag in everything from this folder at once, including the folders.
+Your library, your mixes, the engine you downloaded and your settings all stay as they are. Coming from 1.1? Drag in everything from this folder at once, including the folders.
 
 ## Put it online for the first time (GitHub Pages)
 
@@ -86,7 +80,7 @@ Your library, your mixes, the engine you downloaded and your settings all stay a
 - **Where things are kept.** The engine and the library are stored by Chrome for your github.io address, separately from Echo Loop. Clearing browsing data for that site removes them. In Settings, **Keep my library safe** asks Chrome not to clear it when the disk runs low.
 - **The cleanest sound path.** Echo Stems mixes at 44.1 kHz in 32-bit floating point. For no rate conversion at all, open Windows Settings > System > Sound, choose your output device and set Format to 24 bit, 44100 Hz; switch Audio enhancements off there too.
 - **Use the web address.** Double-clicking `index.html` in a folder doesn't work: browsers don't run the background engine or the mixing engine from a file opened that way.
-- **Updating later.** If you change any file, also change `es-app-v5` to `es-app-v6` (and so on) at the top of `sw.js`.
+- **Updating later.** If you change any file, also change `es-app-v4` to `es-app-v5` (and so on) at the top of `sw.js`.
 
 ## Files
 

@@ -286,7 +286,7 @@ button.read.cmp{color:var(--teal);text-decoration:line-through 1.5px;background:
 <div class="app">
   <header class="topbar">
     <img class="logo" src="icon-192.png" alt="">
-    <div class="brand"><b>Echo Stems</b><span>1.3.1</span></div>
+    <div class="brand"><b>Echo Stems</b><span>1.3</span></div>
     <button class="btn small" id="libToggle" aria-expanded="false" aria-controls="side">Library</button>
     <div class="now-title" id="nowTitle"></div>
     <span id="offlineBadge" class="badge" hidden>Works offline</span>
@@ -481,7 +481,7 @@ button.read.cmp{color:var(--teal);text-decoration:line-through 1.5px;background:
   </section>
   <section class="set">
     <h3>About</h3>
-    <p>Echo Stems 1.3.1. Separation engine: BS-RoFormer SW (six layers), exported for browsers by elicwhite (MIT). Runtime: ONNX Runtime Web by Microsoft (MIT). Lossless library: libFLAC by Xiph.Org (BSD) via libflac.js (MIT). Typeface: Archivo by Omnibus-Type (SIL Open Font License).</p>
+    <p>Echo Stems 1.3. Separation engine: BS-RoFormer SW (six layers), exported for browsers by elicwhite (MIT). Runtime: ONNX Runtime Web by Microsoft (MIT). Lossless library: libFLAC by Xiph.Org (BSD) via libflac.js (MIT). Typeface: Archivo by Omnibus-Type (SIL Open Font License).</p>
   </section>
 </aside>
 
@@ -495,7 +495,7 @@ button.read.cmp{color:var(--teal);text-decoration:line-through 1.5px;background:
 'use strict';
 /* ================= helpers ================= */
 const $ = (id) => document.getElementById(id);
-const SR = 44100, CHUNK = 176400, APP_VERSION = '1.3.1';
+const SR = 44100, CHUNK = 176400, APP_VERSION = '1.3';
 const MODEL_MB = { f16: 336, f32: 669 };
 const MAX_WHOLE = 8 * 60;                        // longest song separated in one go (memory)
 // model order: bass, drums, other, vocals, guitar, piano. Display order runs from top to bottom.
@@ -1718,12 +1718,6 @@ function renderLanesState() {
   scheduleDraw();
   renderHearing();
 }
-/* Shading of uncertain passages: how far the engine's two listens disagreed, relative to the layer itself (engine.js).
-   Recalibrated from the first real report (a piano ballad at High quality): starting at -22 dB it covered 54 to 69% of
-   the guitar, piano and drums, which singles out nothing. Starting at -12 dB and reaching full strength at -4 dB, it
-   marks roughly the shakiest quarter of that guitar and a sixth of the piano, and next to nothing of the vocals, bass
-   and drums, where the listens agreed. */
-const SHADE_FROM = -12, SHADE_FULL = -4;
 let drawQueued = false;
 function scheduleDraw() { if (drawQueued) return; drawQueued = true; requestAnimationFrame(() => { drawQueued = false; drawLanes(); }); }
 function drawLanes() {
@@ -1748,8 +1742,8 @@ function drawLanes() {
       ctx.fillStyle = warn;
       for (let b = 0; b < nb; b++) {
         const d = data[row + b];
-        if (!(d > SHADE_FROM)) continue;
-        const a = Math.min(1, (d - SHADE_FROM) / (SHADE_FULL - SHADE_FROM)) * shadeMax;
+        if (!(d > -22)) continue;
+        const a = Math.min(1, (d + 22) / 12) * shadeMax;
         const x0 = Math.round(((b * block) / s.n) * w), x1 = Math.round((Math.min(s.n, (b + 1) * block) / s.n) * w);
         if (x1 <= x0) continue;                              // edges meet exactly, so neighbouring blocks never overlap
         ctx.globalAlpha = a; ctx.fillRect(x0, 0, x1 - x0, h);
@@ -2066,14 +2060,8 @@ function deviceText(t, info) {
 }
 function timingNumbers(v) {
   const t = v.timing, seg = t.segMs, first = seg[0] / 1000;
-  const later = seg.length > 1 ? seg.slice(1) : seg.slice();
-  const mean = (a) => a.reduce((x, y) => x + y, 0) / a.length / 1000;
-  const q = Math.max(1, Math.floor(later.length / 4));
-  return {
-    first, steady: mean(later), total: t.totalMs / 1000 + (t.measureMs || 0) / 1000 + (t.loadMs || 0) / 1000, load: t.loadMs / 1000, chunks: t.nSeg,
-    // the spread, and the first and last quarter of the run: a card that slows down as it heats up shows here
-    fastest: Math.min(...later) / 1000, slowest: Math.max(...later) / 1000, firstQ: mean(later.slice(0, q)), lastQ: mean(later.slice(-q)),
-  };
+  const steady = seg.length > 1 ? seg.slice(1).reduce((x, y) => x + y, 0) / (seg.length - 1) / 1000 : first;
+  return { first, steady, total: t.totalMs / 1000 + (t.measureMs || 0) / 1000 + (t.loadMs || 0) / 1000, load: t.loadMs / 1000, chunks: t.nSeg };
 }
 function disStats(v) {
   if (!v.dis) return null;
@@ -2082,7 +2070,7 @@ function disStats(v) {
     const vals = Array.from(data.subarray(i * nb, (i + 1) * nb)).filter(Number.isFinite).sort((a, b) => a - b);
     if (!vals.length) return NAMES[i] + ' n/a';
     const med = vals[vals.length >> 1], p90 = vals[Math.min(vals.length - 1, Math.floor(vals.length * 0.9))];
-    const shaded = vals.filter((x) => x > SHADE_FROM).length / vals.length;
+    const shaded = vals.filter((x) => x > -22).length / vals.length;
     return NAMES[i] + ' ' + num(med, 1) + ' / ' + num(p90, 1) + ' dB, ' + Math.round(shaded * 100) + '% shaded';
   });
 }
@@ -2097,14 +2085,14 @@ function reportText() {
       'Quality: ' + QUALITIES[v.quality].name + ' (' + QUALITIES[v.quality].note + ')',
       'Ran on: ' + (v.device || ''),
       'Separation: ' + fmtSec(t.totalMs / 1000) + ' for ' + fmtSec(dur) + ' of music (' + (dur / (t.totalMs / 1000)).toFixed(2) + '× real time)',
-      'Chunks: ' + x.chunks + '; first ' + x.first.toFixed(2) + ' s; later ' + x.steady.toFixed(2) + ' s on average' + (x.chunks > 8 ? ' (' + x.fastest.toFixed(2) + ' to ' + x.slowest.toFixed(2) + ' s; first quarter ' + x.firstQ.toFixed(2) + ' s, last quarter ' + x.lastQ.toFixed(2) + ' s)' : ''),
+      'Chunks: ' + x.chunks + '; first ' + x.first.toFixed(2) + ' s; later ' + x.steady.toFixed(2) + ' s on average',
       'Sound maths: ' + (t.dspMs / 1000).toFixed(2) + ' s; loudness measurements: ' + ((t.measureMs || 0) / 1000).toFixed(2) + ' s',
       'Engine loading: ' + (t.freshSession ? x.load.toFixed(2) + ' s' : 'already loaded'),
       'Leftover handed to the layers: ' + (Number.isFinite(v.leftoverDb) ? num(v.leftoverDb, 1) + ' dB of the song’s energy' : 'none'),
       'Original: ' + (Number.isFinite(v.Lorig) ? num(v.Lorig, 1) + ' LUFS' : 'silent') + ', peak ' + num(20 * Math.log10(s.origPeak || 1e-9), 2) + ' dBFS',
     );
     const ds = disStats(v);
-    lines.push(ds ? 'Disagreement (median / 90th percentile; shaded above ' + num(SHADE_FROM, 0) + ' dB): ' + ds.join('; ') : 'Disagreement: not measured at Standard quality');
+    lines.push(ds ? 'Disagreement (median / 90th percentile; shaded above -22 dB): ' + ds.join('; ') : 'Disagreement: not measured at Standard quality');
     if (s.lm) lines.push('Current mix: ' + $('hearing').textContent.replace(/\.$/, '') + '; headroom ' + S.headroom + ' dB; master ' + $('lmRead').textContent + (s.lm.peak ? ', mix peak before the master ' + num(20 * Math.log10(s.lm.peak), 2) + ' dBFS' : '') + (Number.isFinite(s.lm.mixLufs) ? ', ' + num(s.lm.mixLufs + 20 * Math.log10(s.lm.master), 1) + ' LUFS as heard' : ''));
     lines.push('Library: ' + (v.lib ? 'saved' : 'not saved'));
   } else lines.push('No song in the mixer.');

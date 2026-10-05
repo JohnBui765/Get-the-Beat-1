@@ -4,7 +4,7 @@
 // and this file never deletes it, so updating the app doesn't make you download the engine again.
 // Bump CACHE whenever you upload changed files, so computers pick them up.
 // The "es-" prefix keeps these caches apart from the Echo Loop apps on the same site.
-const CACHE = 'es-app-v5';
+const CACHE = 'es-app-v4';
 const RUNTIME = 'es-ort-1.24.3';
 // The newer runtime the speed check may choose comes from a public CDN; once fetched it is kept here for offline use.
 const CDN = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/';
