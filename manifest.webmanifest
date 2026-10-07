@@ -2,7 +2,7 @@
   "name": "Echo Stems",
   "short_name": "Echo Stems",
   "description": "Splits a song into six layers on your own computer, then lets you mix them to play along and study. Works offline.",
-  "id": "./",
+  "id": "/echo-stems/",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
